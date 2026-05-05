@@ -9,25 +9,12 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const defaultURL = "http://localhost:7832"
-const defaultHTTPTimeout = 15 * time.Second
-
-func httpTimeout() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("FEDORA_NEXUS_HTTP_TIMEOUT_MS"))
-	if raw == "" {
-		return defaultHTTPTimeout
-	}
-	ms, err := strconv.Atoi(raw)
-	if err != nil || ms <= 0 {
-		return defaultHTTPTimeout
-	}
-	return time.Duration(ms) * time.Millisecond
-}
+const defaultHealthTimeout = 2 * time.Second
 
 // ServerURL returns the fedora-nexus server URL to use.
 // Priority: flag override > FEDORA_NEXUS_SERVER_URL env > auto-detect localhost:7832.
@@ -63,7 +50,7 @@ func Call(serverURL, tool string, args map[string]any) Result {
 	if err != nil {
 		return Result{Err: err}
 	}
-	httpClient := &http.Client{Timeout: httpTimeout()}
+	httpClient := &http.Client{} // no timeout — indexing can take minutes
 	resp, err := httpClient.Post(serverURL+"/call", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return Result{Err: fmt.Errorf("server unreachable: %w", err)}
@@ -85,7 +72,7 @@ func Call(serverURL, tool string, args map[string]any) Result {
 
 // IsHealthy returns true if the server at serverURL responds to /health.
 func IsHealthy(serverURL string) bool {
-	httpClient := &http.Client{Timeout: httpTimeout()}
+	httpClient := &http.Client{Timeout: defaultHealthTimeout}
 	resp, err := httpClient.Get(serverURL + "/health")
 	if err != nil {
 		return false

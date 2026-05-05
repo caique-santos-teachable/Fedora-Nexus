@@ -598,9 +598,19 @@ def _run_http() -> None:
     port = int(_os.environ.get("FEDORA_NEXUS_HTTP_PORT", "7832"))
     sse = SseServerTransport("/messages/")
 
-    async def handle_sse(request):
-        async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
-            await app.run(streams[0], streams[1], app.create_initialization_options())
+    class SseHandler:
+        """ASGI app for the /sse endpoint.
+
+        Using a class (not a plain function) bypasses Starlette's
+        request_response() wrapper, which would try to call the return value as
+        a Response. connect_sse() sends the HTTP response directly via `send`,
+        so the handler must not return a Response — only ASGI apps (classes)
+        are allowed to do that in Starlette 1.x.
+        """
+
+        async def __call__(self, scope, receive, send):
+            async with sse.connect_sse(scope, receive, send) as streams:
+                await app.run(streams[0], streams[1], app.create_initialization_options())
 
     async def handle_call(request: Request) -> JSONResponse:
         """JSON-RPC style endpoint used by the fedora-nexus CLI.
@@ -625,7 +635,7 @@ def _run_http() -> None:
 
     starlette_app = Starlette(
         routes=[
-            Route("/sse", endpoint=handle_sse),
+            Route("/sse", endpoint=SseHandler()),
             Mount("/messages/", app=sse.handle_post_message),
             Route("/call", endpoint=handle_call, methods=["POST"]),
             Route("/health", endpoint=handle_health, methods=["GET"]),

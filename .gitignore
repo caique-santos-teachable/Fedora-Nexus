@@ -31,6 +31,9 @@ coverage.xml
 # Go
 cli/fedora-nexus
 
+# CLI build cache (setup-cli.sh output)
+.cli/
+
 # Env / secrets
 .env
 !.env.example

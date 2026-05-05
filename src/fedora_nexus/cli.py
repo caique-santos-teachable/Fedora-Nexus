@@ -23,20 +23,6 @@ from urllib.request import Request, urlopen
 import click
 
 _DEFAULT_SERVER_URL = "http://localhost:7832"
-_DEFAULT_HTTP_TIMEOUT_SECONDS = 15.0
-
-
-def _http_timeout_seconds() -> float:
-    raw = os.environ.get("FEDORA_NEXUS_HTTP_TIMEOUT_SECONDS", "").strip()
-    if not raw:
-        return _DEFAULT_HTTP_TIMEOUT_SECONDS
-    try:
-        timeout = float(raw)
-        if timeout > 0:
-            return timeout
-    except ValueError:
-        pass
-    return _DEFAULT_HTTP_TIMEOUT_SECONDS
 
 
 def _server_url() -> str | None:
@@ -64,7 +50,7 @@ def _http_call(server_url: str, tool: str, args: dict) -> dict:
         method="POST",
     )
     try:
-        with urlopen(req, timeout=_http_timeout_seconds()) as resp:
+        with urlopen(req, timeout=None) as resp:
             return json.loads(resp.read())
     except URLError as exc:
         return {"error": f"Cannot reach fedora-nexus server at {server_url}: {exc.reason}", "code": "SERVER_UNREACHABLE"}
