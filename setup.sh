@@ -174,49 +174,54 @@ install_docker_server() {
 }
 
 # ── Package installation ──────────────────────────────────────────────────────
-# Find a Python interpreter that satisfies >=3.11.
-find_python() {
-  for candidate in python3.13 python3.12 python3.11 python3 python; do
-    if command -v "$candidate" &>/dev/null; then
-      local ver
-      ver="$("$candidate" -c 'import sys; print(sys.version_info[:2])' 2>/dev/null)"
-      # ver looks like "(3, 13)"
-      local major minor
-      major="$(echo "$ver" | tr -d '() ' | cut -d',' -f1)"
-      minor="$(echo "$ver" | tr -d '() ' | cut -d',' -f2)"
-      if [[ "$major" -ge 3 && "$minor" -ge 11 ]]; then
-        echo "$candidate"
-        return 0
-      fi
-    fi
-  done
-  return 1
+# Ensure uv is available, installing it if necessary.
+ensure_uv() {
+  if command -v uv &>/dev/null; then
+    return 0
+  fi
+  # Add ~/.local/bin to PATH now in case uv was just installed in a prior run
+  export PATH="$HOME/.local/bin:$PATH"
+  if command -v uv &>/dev/null; then
+    return 0
+  fi
+  if ! command -v curl &>/dev/null; then
+    warn "curl not found — cannot auto-install uv."
+    warn "Install uv manually: https://docs.astral.sh/uv/getting-started/installation/"
+    exit 1
+  fi
+  step "Installing uv (Python toolchain manager)..."
+  if ! curl -LsSf https://astral.sh/uv/install.sh | sh; then
+    warn "uv installation failed — check your internet connection and SSL certificates."
+    warn "Install uv manually: https://docs.astral.sh/uv/getting-started/installation/"
+    exit 1
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v uv &>/dev/null; then
+    warn "uv installed but not found in PATH. Re-run setup.sh or open a new terminal."
+    exit 1
+  fi
+  info "uv installed: $(uv --version)"
 }
 
 install_package() {
   step "Installing fedora-nexus package..."
 
-  local py
-  if ! py="$(find_python)"; then
-    echo ""
-    warn "No Python >=3.11 interpreter found."
-    warn "Install Python 3.11+ via https://python.org or 'brew install python@3.13', then re-run."
-    exit 1
-  fi
-
-  info "Using interpreter: $(command -v "$py") ($("$py" --version))"
+  ensure_uv
+  info "Using uv: $(command -v uv) ($(uv --version))"
 
   local venv_dir="$HOME/.local/fedora-nexus-venv"
   local bin_dir="$HOME/.local/bin"
 
-  # Create isolated venv if it doesn't exist (or if Python changed)
-  if [[ ! -x "$venv_dir/bin/python" ]]; then
-    "$py" -m venv "$venv_dir" --upgrade-deps
-    info "Created venv: $venv_dir"
-  fi
+  # Install the Python version declared in .python-version (portable, isolated)
+  uv python install
+  info "Python $(cat "$REPO_DIR/.python-version") ready"
+
+  # Create isolated venv using the pinned Python version
+  uv venv "$venv_dir" --python "$(cat "$REPO_DIR/.python-version")"
+  info "Created venv: $venv_dir"
 
   # Install / upgrade the package
-  "$venv_dir/bin/pip" install -e "$REPO_DIR" --quiet
+  uv pip install -e "$REPO_DIR" --python "$venv_dir/bin/python" --quiet
   info "Package installed into venv"
 
   # Expose the CLI binary via a symlink in ~/.local/bin (which is usually in PATH)

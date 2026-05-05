@@ -271,3 +271,58 @@ Conteúdo Public API V2 → `public-api-v2.instructions.md`
       assert store.list_repos() == []        # DB recreated
       assert store._embedding_cache == {}    # every in-memory cache cleared
   ```
+
+13) Setup global de testes com banco (RSpec) — `rails_helper` + estratégia de isolamento declarados na suíte, nunca por spec
+- **Anti-pattern**: um spec novo que toca o banco (usa `Fabricate`, `.create!`, `.find_by`, etc.) carrega apenas `require 'spec_helper'` em vez de `require 'rails_helper'`; ou então cada spec configura seu próprio `before(:each) { DatabaseCleaner.start }` / `after(:each) { DatabaseCleaner.clean }`. O resultado: testes passam isolados, quebram em CI por leak de estado entre exemplos, ou falham com `ActiveRecord::StatementInvalid` porque o schema não foi carregado. QA flaga como flakiness e cobertura inválida.
+- **Padrão recomendado**: toda spec que toca o banco **deve** carregar `rails_helper` (que por sua vez carrega Rails + estratégia global de isolamento). A configuração de `DatabaseCleaner` (ou `use_transactional_fixtures`) e `ActiveRecord::Migration.maintain_test_schema!` vive **uma única vez** em `spec/rails_helper.rb` dentro de `RSpec.configure`. Specs nunca repetem esse setup localmente.
+- **Estratégia padrão**:
+  - `:transaction` para a maioria das specs (model, request, service) — rápido, rollback automático.
+  - `:truncation` apenas para specs com múltiplas conexões (system specs, JS-driven, jobs com Sidekiq inline).
+  - `before(:suite)` faz `DatabaseCleaner.clean_with(:truncation)` uma vez para garantir baseline limpo.
+- **Checklist** ao escrever spec novo que toca o banco:
+  1. A primeira linha é `require 'rails_helper'` (não `spec_helper`)? → obrigatório.
+  2. Existe algum `DatabaseCleaner.start` / `.clean` / `.strategy=` dentro do próprio spec? → remover; isso pertence ao `rails_helper`.
+  3. O spec depende de schema atualizado? → confiar em `maintain_test_schema!` do `rails_helper`; nunca chamar `db:test:prepare` manualmente dentro do spec.
+  4. Spec precisa de estratégia diferente da global (ex.: `:truncation` para system spec)? → usar metadata (`:js`, `type: :system`) e configurar **um único** hook condicional no `rails_helper`, nunca override por arquivo.
+- **Regra**: se um spec precisa redeclarar setup de banco, é sinal de que `rails_helper` está incompleto — corrija o setup global, não o spec individual.
+- **Exemplo** (Rails + RSpec + DatabaseCleaner):
+  ```ruby
+  # ❌ spec novo carrega spec_helper e configura DatabaseCleaner localmente
+  require 'spec_helper'  # ← Rails não carregado; Fabricate vai falhar
+
+  RSpec.describe Course do
+    before(:each) { DatabaseCleaner.start }       # ← duplica setup global
+    after(:each)  { DatabaseCleaner.clean }       # ← idem
+    it 'creates a course' do
+      expect(Fabricate(:course)).to be_persisted
+    end
+  end
+
+  # ✅ spec carrega rails_helper; setup global cuida do isolamento
+  require 'rails_helper'
+
+  RSpec.describe Course do
+    it 'creates a course' do
+      expect(Fabricate(:course)).to be_persisted
+    end
+  end
+
+  # spec/rails_helper.rb — setup global, único ponto de verdade
+  ActiveRecord::Migration.maintain_test_schema!
+
+  RSpec.configure do |config|
+    config.use_transactional_fixtures = false
+
+    config.before(:suite) do
+      DatabaseCleaner.clean_with(:truncation)
+    end
+
+    config.before(:each) do |example|
+      DatabaseCleaner.strategy =
+        example.metadata[:js] || example.metadata[:type] == :system ? :truncation : :transaction
+      DatabaseCleaner.start
+    end
+
+    config.after(:each) { DatabaseCleaner.clean }
+  end
+  ```
