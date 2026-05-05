@@ -496,3 +496,424 @@ def test_ts_symbol_mode_has_content(tmp_path):
     assert graph.has_node(sym)
     attrs = graph.node_attrs(sym)
     assert "multiply" in attrs.get("content", "")
+
+
+# ── Ruby/Rails new node kinds ─────────────────────────────────────────────────
+
+def test_ruby_association_belongs_to(tmp_path):
+    (tmp_path / "comment.rb").write_text(
+        "class Comment\n"
+        "  belongs_to :post\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("comment.rb#association:belongs_to:post")
+    adj = graph.to_adjacency_json()
+    node = next(n for n in adj["nodes"] if n["id"] == "comment.rb#association:belongs_to:post")
+    assert node["kind"] == "association"
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["to"] == "comment.rb#association:belongs_to:post" for e in contains)
+
+
+def test_ruby_association_has_many(tmp_path):
+    (tmp_path / "post.rb").write_text(
+        "class Post\n"
+        "  has_many :comments\n"
+        "  has_one :author\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("post.rb#association:has_many:comments")
+    assert graph.has_node("post.rb#association:has_one:author")
+    adj = graph.to_adjacency_json()
+    kinds = {n["id"]: n["kind"] for n in adj["nodes"]}
+    assert kinds["post.rb#association:has_many:comments"] == "association"
+    assert kinds["post.rb#association:has_one:author"] == "association"
+
+
+def test_ruby_association_has_and_belongs_to_many(tmp_path):
+    (tmp_path / "article.rb").write_text(
+        "class Article\n"
+        "  has_and_belongs_to_many :tags\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("article.rb#association:has_and_belongs_to_many:tags")
+
+
+def test_ruby_validation_validates(tmp_path):
+    (tmp_path / "user.rb").write_text(
+        "class User\n"
+        "  validates :email, presence: true\n"
+        "  validates :name, length: { minimum: 2 }\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("user.rb#validation:validates:email")
+    assert graph.has_node("user.rb#validation:validates:name")
+    adj = graph.to_adjacency_json()
+    node = next(n for n in adj["nodes"] if n["id"] == "user.rb#validation:validates:email")
+    assert node["kind"] == "validation"
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["to"] == "user.rb#validation:validates:email" for e in contains)
+
+
+def test_ruby_validation_validate_custom(tmp_path):
+    (tmp_path / "order.rb").write_text(
+        "class Order\n"
+        "  validate :check_stock\n"
+        "  def check_stock; end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("order.rb#validation:validate:check_stock")
+
+
+def test_ruby_scope(tmp_path):
+    (tmp_path / "post.rb").write_text(
+        "class Post\n"
+        "  scope :published, -> { where(published: true) }\n"
+        "  scope :recent, -> { order(created_at: :desc) }\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("post.rb#scope:published")
+    assert graph.has_node("post.rb#scope:recent")
+    adj = graph.to_adjacency_json()
+    node = next(n for n in adj["nodes"] if n["id"] == "post.rb#scope:published")
+    assert node["kind"] == "scope"
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["to"] == "post.rb#scope:published" for e in contains)
+
+
+def test_ruby_mixin_include(tmp_path):
+    (tmp_path / "user.rb").write_text(
+        "class User\n"
+        "  include Searchable\n"
+        "  extend ClassMethods\n"
+        "  prepend Auditable\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("user.rb#mixin:include:Searchable")
+    assert graph.has_node("user.rb#mixin:extend:ClassMethods")
+    assert graph.has_node("user.rb#mixin:prepend:Auditable")
+    adj = graph.to_adjacency_json()
+    for sym_id in ["user.rb#mixin:include:Searchable", "user.rb#mixin:extend:ClassMethods", "user.rb#mixin:prepend:Auditable"]:
+        node = next(n for n in adj["nodes"] if n["id"] == sym_id)
+        assert node["kind"] == "mixin"
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["to"] == "user.rb#mixin:include:Searchable" for e in contains)
+
+
+def test_ruby_attr_accessor(tmp_path):
+    (tmp_path / "person.rb").write_text(
+        "class Person\n"
+        "  attr_accessor :name, :age\n"
+        "  attr_reader :id\n"
+        "  attr_writer :email\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("person.rb#attr:name")
+    assert graph.has_node("person.rb#attr:age")
+    assert graph.has_node("person.rb#attr:id")
+    assert graph.has_node("person.rb#attr:email")
+    adj = graph.to_adjacency_json()
+    for sym_id in ["person.rb#attr:name", "person.rb#attr:age", "person.rb#attr:id", "person.rb#attr:email"]:
+        node = next(n for n in adj["nodes"] if n["id"] == sym_id)
+        assert node["kind"] == "attr"
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["to"] == "person.rb#attr:name" for e in contains)
+
+
+def test_ruby_concern_kind(tmp_path):
+    (tmp_path / "searchable.rb").write_text(
+        "module Searchable\n"
+        "  extend ActiveSupport::Concern\n"
+        "  def search(query)\n"
+        "    where(name: query)\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("searchable.rb#module:Searchable")
+    adj = graph.to_adjacency_json()
+    node = next(n for n in adj["nodes"] if n["id"] == "searchable.rb#module:Searchable")
+    assert node["kind"] == "concern"
+
+
+def test_ruby_plain_module_is_not_concern(tmp_path):
+    (tmp_path / "helper.rb").write_text(
+        "module Helper\n"
+        "  def help; end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    node = next(n for n in adj["nodes"] if n["id"] == "helper.rb#module:Helper")
+    assert node["kind"] == "module"
+
+
+# ── Ruby indexing gaps (10 new kinds + precision) ────────────────────────────
+
+
+# Gap #1 — require_dependency
+def test_ruby_require_dependency_import_edge(tmp_path):
+    (tmp_path / "base.rb").write_text("BASE = 1\n")
+    (tmp_path / "app.rb").write_text("require_dependency 'base'\n")
+    graph = RubyIndexer().index(str(tmp_path))
+    assert "base.rb" in graph.get_dependencies("app.rb")
+
+
+# Gap #1 — autoload
+def test_ruby_autoload_import_edge(tmp_path):
+    (tmp_path / "my_class.rb").write_text("class MyClass; end\n")
+    (tmp_path / "app.rb").write_text('autoload :MyClass, "my_class"\n')
+    graph = RubyIndexer().index(str(tmp_path))
+    assert "my_class.rb" in graph.get_dependencies("app.rb")
+
+
+# Gap #2 — class inheritance attribute
+def test_ruby_class_inheritance_superclass_attribute(tmp_path):
+    (tmp_path / "user.rb").write_text(
+        "class User\n"
+        "  def name; end\n"
+        "end\n"
+        "class AdminUser < User\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("user.rb#class:AdminUser")
+    attrs = graph.node_attrs("user.rb#class:AdminUser")
+    assert attrs.get("superclass") == "User"
+
+
+# Gap #2 — class inheritance INHERITS edge (intra-file)
+def test_ruby_class_inheritance_inherits_edge(tmp_path):
+    (tmp_path / "user.rb").write_text(
+        "class User\n"
+        "  def name; end\n"
+        "end\n"
+        "class AdminUser < User\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    inherits_edges = [e for e in adj["edges"] if e["rel"] == "INHERITS"]
+    assert any(
+        e["from"] == "user.rb#class:AdminUser" and e["to"] == "user.rb#class:User"
+        for e in inherits_edges
+    ), f"Expected INHERITS edge, got: {inherits_edges}"
+
+
+# Gap #3 — intra-file CALLS edge
+def test_ruby_intrafile_calls_edge(tmp_path):
+    (tmp_path / "service.rb").write_text(
+        "class PaymentService\n"
+        "  def process\n"
+        "    charge\n"
+        "  end\n"
+        "\n"
+        "  def charge\n"
+        "    true\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    calls_edges = [e for e in adj["edges"] if e["rel"] == "CALLS"]
+    assert any(
+        e["from"] == "service.rb#method:PaymentService.process"
+        and e["to"] == "service.rb#method:PaymentService.charge"
+        for e in calls_edges
+    ), f"Expected intra-file CALLS edge, got: {calls_edges}"
+
+
+# Gap #4 — enum node
+def test_ruby_enum_node(tmp_path):
+    (tmp_path / "post.rb").write_text(
+        "class Post\n"
+        "  enum status: [:draft, :published, :archived]\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("post.rb#enum:status")
+    attrs = graph.node_attrs("post.rb#enum:status")
+    assert attrs["kind"] == "enum"
+    adj = graph.to_adjacency_json()
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["from"] == "post.rb#class:Post" and e["to"] == "post.rb#enum:status" for e in contains)
+
+
+# Gap #5 — delegate node
+def test_ruby_delegate_node(tmp_path):
+    (tmp_path / "user.rb").write_text(
+        "class User\n"
+        "  delegate :email, to: :account\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("user.rb#delegate:email")
+    attrs = graph.node_attrs("user.rb#delegate:email")
+    assert attrs["kind"] == "delegate"
+    assert attrs.get("target") == "account"
+    adj = graph.to_adjacency_json()
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["from"] == "user.rb#class:User" and e["to"] == "user.rb#delegate:email" for e in contains)
+
+
+# Gap #6 — constant node
+def test_ruby_constant_node(tmp_path):
+    (tmp_path / "config.rb").write_text(
+        "class Config\n"
+        "  MAX_RETRIES = 3\n"
+        '  DEFAULT_ROLE = "viewer"\n'
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("config.rb#constant:Config::MAX_RETRIES")
+    assert graph.has_node("config.rb#constant:Config::DEFAULT_ROLE")
+    for sym_id in ["config.rb#constant:Config::MAX_RETRIES", "config.rb#constant:Config::DEFAULT_ROLE"]:
+        attrs = graph.node_attrs(sym_id)
+        assert attrs["kind"] == "constant"
+    adj = graph.to_adjacency_json()
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["to"] == "config.rb#constant:Config::MAX_RETRIES" for e in contains)
+
+
+# Gap #6 — top-level constant (no namespace)
+def test_ruby_top_level_constant_node(tmp_path):
+    (tmp_path / "limits.rb").write_text("TIMEOUT = 30\n")
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("limits.rb#constant:TIMEOUT")
+    attrs = graph.node_attrs("limits.rb#constant:TIMEOUT")
+    assert attrs["kind"] == "constant"
+
+
+# Gap #8 — nested module namespace for class sym_id
+def test_ruby_nested_namespace_class_sym_id(tmp_path):
+    (tmp_path / "controller.rb").write_text(
+        "module Admin\n"
+        "  class UsersController\n"
+        "    def index\n"
+        "      @users = []\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    # Class node must use qualified name
+    assert graph.has_node("controller.rb#class:Admin::UsersController")
+    # Method must use full qualified prefix
+    assert graph.has_node("controller.rb#method:Admin::UsersController.index")
+    adj = graph.to_adjacency_json()
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(
+        e["from"] == "controller.rb#class:Admin::UsersController"
+        and e["to"] == "controller.rb#method:Admin::UsersController.index"
+        for e in contains
+    )
+
+
+# Gap #8 — doubly nested namespace
+def test_ruby_doubly_nested_namespace_class_sym_id(tmp_path):
+    (tmp_path / "api.rb").write_text(
+        "module API\n"
+        "  module V1\n"
+        "    class UsersController\n"
+        "      def show; end\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("api.rb#class:API::V1::UsersController")
+    assert graph.has_node("api.rb#method:API::V1::UsersController.show")
+
+
+# Gap #9 — alias_method node (call form)
+def test_ruby_alias_method_node(tmp_path):
+    (tmp_path / "user.rb").write_text(
+        "class User\n"
+        "  def save; end\n"
+        "  alias_method :persist, :save\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("user.rb#alias:persist")
+    attrs = graph.node_attrs("user.rb#alias:persist")
+    assert attrs["kind"] == "alias"
+    assert attrs.get("original") == "save"
+    adj = graph.to_adjacency_json()
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    assert any(e["from"] == "user.rb#class:User" and e["to"] == "user.rb#alias:persist" for e in contains)
+
+
+# Gap #9 — alias keyword node
+def test_ruby_alias_keyword_node(tmp_path):
+    (tmp_path / "user.rb").write_text(
+        "class User\n"
+        "  def save; end\n"
+        "  alias persist save\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("user.rb#alias:persist")
+    attrs = graph.node_attrs("user.rb#alias:persist")
+    assert attrs["kind"] == "alias"
+    assert attrs.get("original") == "save"
+
+
+# Gap #7 — concern included block indexes inner macros
+def test_ruby_concern_included_block_indexes_macros(tmp_path):
+    (tmp_path / "searchable.rb").write_text(
+        "module Searchable\n"
+        "  extend ActiveSupport::Concern\n"
+        "  included do\n"
+        "    scope :active, -> { where(active: true) }\n"
+        "    has_many :tags\n"
+        "    validates :name, presence: true\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("searchable.rb#scope:active")
+    assert graph.has_node("searchable.rb#association:has_many:tags")
+    assert graph.has_node("searchable.rb#validation:validates:name")
+    adj = graph.to_adjacency_json()
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    # All three should be contained by the concern module
+    assert any(e["from"] == "searchable.rb#module:Searchable" and e["to"] == "searchable.rb#scope:active" for e in contains)
+    assert any(e["from"] == "searchable.rb#module:Searchable" and e["to"] == "searchable.rb#association:has_many:tags" for e in contains)
+    assert any(e["from"] == "searchable.rb#module:Searchable" and e["to"] == "searchable.rb#validation:validates:name" for e in contains)
+
+
+# Gap #10 — content attribute on new node kinds
+def test_ruby_new_node_kinds_have_content(tmp_path):
+    (tmp_path / "model.rb").write_text(
+        "class Post\n"
+        "  before_save :set_slug\n"
+        "  has_many :comments\n"
+        "  validates :title, presence: true\n"
+        "  scope :published, -> { where(published: true) }\n"
+        "  include Searchable\n"
+        "  attr_accessor :draft\n"
+        "  delegate :email, to: :author\n"
+        "  enum status: [:draft, :live]\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    for sym_id in [
+        "model.rb#hook:before_save:set_slug",
+        "model.rb#association:has_many:comments",
+        "model.rb#validation:validates:title",
+        "model.rb#scope:published",
+        "model.rb#mixin:include:Searchable",
+        "model.rb#attr:draft",
+        "model.rb#delegate:email",
+        "model.rb#enum:status",
+    ]:
+        assert graph.has_node(sym_id), f"Missing node: {sym_id}"
+        attrs = graph.node_attrs(sym_id)
+        assert attrs.get("content"), f"Missing content on {sym_id}"
