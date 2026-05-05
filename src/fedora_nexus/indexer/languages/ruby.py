@@ -1,0 +1,573 @@
+"""Ruby AST indexer — imports, symbols, inheritance, and CALLS edges."""
+
+from __future__ import annotations
+
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+from fedora_nexus.graph.engine import DependencyGraph
+
+# Rails/AR callbacks — all before_*/after_*/around_* variants
+# https://api.rubyonrails.org/classes/ActiveRecord/Callbacks.html
+_RAILS_HOOK_NAMES = frozenset({
+    "after_action", "after_commit", "after_create", "after_destroy",
+    "after_find", "after_initialize", "after_rollback", "after_save",
+    "after_update", "after_validation",
+    "around_action", "around_commit", "around_create", "around_destroy",
+    "around_save", "around_update", "around_validation",
+    "before_action", "before_commit", "before_create", "before_destroy",
+    "before_initialize", "before_save", "before_update",
+    "before_validation",
+    "skip_after_action", "skip_before_action",
+})
+
+# https://api.rubyonrails.org/classes/ActiveRecord/Associations/ClassMethods.html
+_RAILS_ASSOCIATION_NAMES = frozenset({
+    "belongs_to", "has_one", "has_many", "has_and_belongs_to_many",
+    "has_one_through", "has_many_through",
+})
+
+# https://api.rubyonrails.org/classes/ActiveModel/Validations/ClassMethods.html
+_RAILS_VALIDATION_NAMES = frozenset({
+    "validate", "validates", "validates_each", "validates_with",
+    "validates_presence_of", "validates_uniqueness_of",
+    "validates_format_of", "validates_length_of", "validates_numericality_of",
+    "validates_inclusion_of", "validates_exclusion_of",
+    "validates_confirmation_of", "validates_acceptance_of",
+})
+
+_RAILS_SCOPE_NAMES = frozenset({"scope", "default_scope"})
+_RUBY_MIXIN_NAMES = frozenset({"include", "extend", "prepend"})
+_RUBY_ATTR_NAMES = frozenset({"attr_accessor", "attr_reader", "attr_writer"})
+_RAILS_ENUM_NAMES = frozenset({"enum"})
+_RAILS_DELEGATION_NAMES = frozenset({"delegate", "delegates"})
+_RUBY_ALIAS_METHOD_NAMES = frozenset({"alias_method"})
+
+
+def _ensure_node(graph: DependencyGraph, path: str, language: str) -> None:
+    if not graph.has_node(path):
+        graph.add_node(path, language=language)
+
+
+class RubyIndexer:
+    """Handles import extraction, symbol extraction, inheritance, and CALLS
+    detection for Ruby (including Rails macros)."""
+
+    # ── Inheritance post-pass ─────────────────────────────────────────────────
+
+    def resolve_inheritance(
+        self,
+        rel: str,
+        graph: DependencyGraph,
+        file_symbols: dict[str, dict[str, str]],
+    ) -> None:
+        """Emit INHERITS edges for Ruby class nodes with a `superclass` attribute."""
+        all_syms: dict[str, str] = {}
+        for syms in file_symbols.values():
+            all_syms.update(syms)
+
+        for sym_id in list(graph.nodes()):
+            if not sym_id.startswith(rel + "#class:"):
+                continue
+            attrs = graph.node_attrs(sym_id)
+            superclass = attrs.get("superclass")
+            if not superclass:
+                continue
+            parent_sym_id = all_syms.get(superclass)
+            if parent_sym_id and parent_sym_id != sym_id:
+                graph.add_edge(sym_id, parent_sym_id, rel="INHERITS")
+
+    # ── Imports ───────────────────────────────────────────────────────────────
+
+    def extract_imports(
+        self,
+        rel: str,
+        tree: Any,
+        current_file: Path,
+        root_path: Path,
+        graph: DependencyGraph,
+    ) -> None:
+        self._walk_imports(tree.root_node, rel, current_file, root_path, graph)
+
+    def _walk_imports(
+        self,
+        node: Any,
+        rel: str,
+        current_file: Path,
+        root_path: Path,
+        graph: DependencyGraph,
+    ) -> None:
+        if node.type == "call":
+            id_node = next((c for c in node.children if c.type == "identifier"), None)
+            if id_node:
+                method_name = id_node.text.decode("utf-8")
+                if method_name in ("require", "require_relative", "require_dependency"):
+                    arg_list = next(
+                        (c for c in node.children if c.type == "argument_list"), None
+                    )
+                    if arg_list:
+                        raw = self._get_string_content(arg_list)
+                        if raw:
+                            if method_name == "require_relative":
+                                dep = self._resolve_relative(raw, current_file, root_path)
+                            else:
+                                dep = self._resolve_absolute(raw, root_path)
+                            if dep and dep != rel:
+                                _ensure_node(graph, dep, "ruby")
+                                graph.add_edge(rel, dep)
+                elif method_name == "autoload":
+                    arg_list = next(
+                        (c for c in node.children if c.type == "argument_list"), None
+                    )
+                    if arg_list:
+                        raw = self._get_string_content(arg_list)
+                        if raw:
+                            dep = self._resolve_absolute(raw, root_path)
+                            if dep and dep != rel:
+                                _ensure_node(graph, dep, "ruby")
+                                graph.add_edge(rel, dep)
+
+        for child in node.children:
+            self._walk_imports(child, rel, current_file, root_path, graph)
+
+    def _get_string_content(self, node: Any) -> str | None:
+        for child in node.children:
+            if child.type == "string":
+                for sc in child.children:
+                    if sc.type == "string_content":
+                        return sc.text.decode("utf-8")
+        return None
+
+    def _resolve_relative(
+        self, raw: str, current_file: Path, root_path: Path
+    ) -> str | None:
+        base = (current_file.parent / raw).resolve()
+        for candidate in [base, base.with_suffix(".rb")]:
+            if candidate.exists():
+                try:
+                    return str(PurePosixPath(candidate.relative_to(root_path)))
+                except ValueError:
+                    return None
+        return None
+
+    def _resolve_absolute(self, raw: str, root_path: Path) -> str | None:
+        base = root_path / raw
+        for candidate in [base, base.with_suffix(".rb")]:
+            if candidate.exists():
+                return str(PurePosixPath(candidate.relative_to(root_path)))
+        return None
+
+    # ── Symbols ───────────────────────────────────────────────────────────────
+
+    def extract_symbols(
+        self, rel: str, tree: Any, graph: DependencyGraph, source: str = ""
+    ) -> dict[str, str]:
+        top_level: dict[str, str] = {}
+        self._walk_symbols(
+            tree.root_node, rel, graph,
+            parent_id=rel, scope_stack=[], source=source, top_level=top_level,
+        )
+        return top_level
+
+    def _walk_symbols(
+        self,
+        node: Any,
+        rel: str,
+        graph: DependencyGraph,
+        parent_id: str,
+        scope_stack: list[tuple[str, str]],
+        source: str = "",
+        top_level: dict[str, str] | None = None,
+    ) -> None:
+        if node.type == "class":
+            name_node = next((c for c in node.children if c.type == "constant"), None)
+            if name_node:
+                class_name = name_node.text.decode("utf-8")
+                namespace = "::".join(n for _, n in scope_stack)
+                qualified_class_name = f"{namespace}::{class_name}" if namespace else class_name
+                superclass_node = next((c for c in node.children if c.type == "superclass"), None)
+                superclass_name: str | None = None
+                if superclass_node:
+                    const_node = next((c for c in superclass_node.children if c.type == "constant"), None)
+                    if const_node:
+                        superclass_name = const_node.text.decode("utf-8")
+                start_line = node.start_point[0] + 1
+                end_line = node.end_point[0] + 1
+                content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
+                sym_id = f"{rel}#class:{qualified_class_name}"
+                node_kwargs: dict[str, Any] = dict(
+                    language="ruby", kind="class",
+                    name=class_name, file_path=rel, start_line=start_line,
+                    end_line=end_line, content=content, is_exported=False,
+                )
+                if superclass_name:
+                    node_kwargs["superclass"] = superclass_name
+                graph.add_node(sym_id, **node_kwargs)
+                graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                if top_level is not None:
+                    top_level[qualified_class_name] = sym_id
+                    if not scope_stack:
+                        top_level[class_name] = sym_id
+                for child in node.children:
+                    self._walk_symbols(
+                        child, rel, graph, sym_id,
+                        scope_stack + [("class", class_name)],
+                        source=source, top_level=top_level,
+                    )
+            return
+
+        elif node.type == "module":
+            name_node = next((c for c in node.children if c.type == "constant"), None)
+            if name_node:
+                mod_name = name_node.text.decode("utf-8")
+                namespace = "::".join(n for _, n in scope_stack)
+                qualified_mod_name = f"{namespace}::{mod_name}" if namespace else mod_name
+                start_line = node.start_point[0] + 1
+                end_line = node.end_point[0] + 1
+                content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
+
+                def _has_concern_extend(n: Any) -> bool:
+                    if n.type == "call":
+                        id_ch = next((c for c in n.children if c.type == "identifier"), None)
+                        if id_ch and id_ch.text.decode("utf-8") == "extend":
+                            arg_list = next((c for c in n.children if c.type == "argument_list"), None)
+                            if arg_list:
+                                return any(
+                                    "Concern" in c.text.decode("utf-8")
+                                    for c in arg_list.children
+                                    if c.type in ("constant", "scope_resolution")
+                                )
+                    return any(_has_concern_extend(c) for c in n.children)
+
+                kind = "concern" if _has_concern_extend(node) else "module"
+                sym_id = f"{rel}#module:{qualified_mod_name}"
+                graph.add_node(sym_id, language="ruby", kind=kind,
+                               name=mod_name, file_path=rel, start_line=start_line,
+                               end_line=end_line, content=content, is_exported=False)
+                graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                if top_level is not None:
+                    top_level[qualified_mod_name] = sym_id
+                    if not scope_stack:
+                        top_level[mod_name] = sym_id
+                for child in node.children:
+                    self._walk_symbols(
+                        child, rel, graph, sym_id,
+                        scope_stack + [("module", mod_name)],
+                        source=source, top_level=top_level,
+                    )
+            return
+
+        elif node.type == "method":
+            name_node = next((c for c in node.children if c.type == "identifier"), None)
+            if name_node:
+                method_name = name_node.text.decode("utf-8")
+                start_line = node.start_point[0] + 1
+                end_line = node.end_point[0] + 1
+                content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
+                prefix = "::".join(name for _, name in scope_stack)
+                qualified = f"{prefix}.{method_name}" if prefix else method_name
+                owner_name = scope_stack[-1][1] if scope_stack else ""
+                sym_id = f"{rel}#method:{qualified}"
+                graph.add_node(sym_id, language="ruby", kind="method",
+                               name=method_name, file_path=rel, start_line=start_line,
+                               end_line=end_line, content=content,
+                               is_exported=False, owner_name=owner_name)
+                graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                if top_level is not None and len(scope_stack) == 1:
+                    top_level[qualified] = sym_id
+            return
+
+        elif node.type == "singleton_method":
+            name_node = next((c for c in node.children if c.type == "identifier"), None)
+            if name_node:
+                method_name = name_node.text.decode("utf-8")
+                start_line = node.start_point[0] + 1
+                end_line = node.end_point[0] + 1
+                content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
+                prefix = "::".join(name for _, name in scope_stack)
+                qualified = f"{prefix}.{method_name}" if prefix else method_name
+                owner_name = scope_stack[-1][1] if scope_stack else ""
+                sym_id = f"{rel}#method:{qualified}"
+                graph.add_node(sym_id, language="ruby", kind="class_method",
+                               name=method_name, file_path=rel, start_line=start_line,
+                               end_line=end_line, content=content,
+                               is_exported=False, owner_name=owner_name)
+                graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                if top_level is not None and len(scope_stack) == 1:
+                    top_level[qualified] = sym_id
+            return
+
+        elif node.type == "call":
+            id_node = next((c for c in node.children if c.type == "identifier"), None)
+            if id_node is None:
+                for child in node.children:
+                    self._walk_symbols(child, rel, graph, parent_id, scope_stack, source=source, top_level=top_level)
+                return
+            macro = id_node.text.decode("utf-8")
+            start_line = node.start_point[0] + 1
+            content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:2000]
+
+            if macro in _RAILS_HOOK_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                callback_name = "__block__"
+                if arg_list:
+                    sym_node = next(
+                        (c for c in arg_list.children if c.type == "simple_symbol"), None
+                    )
+                    if sym_node:
+                        callback_name = sym_node.text.decode("utf-8").lstrip(":")
+                sym_id = f"{rel}#hook:{macro}:{callback_name}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="hook",
+                                   name=f"{macro}:{callback_name}", file_path=rel,
+                                   start_line=start_line, content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RAILS_ASSOCIATION_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                assoc_name = "__unknown__"
+                if arg_list:
+                    sym_node = next(
+                        (c for c in arg_list.children if c.type in ("simple_symbol", "string")), None
+                    )
+                    if sym_node:
+                        raw = sym_node.text.decode("utf-8")
+                        assoc_name = raw.lstrip(":").strip("'\"")
+                sym_id = f"{rel}#association:{macro}:{assoc_name}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="association",
+                                   name=assoc_name, macro=macro, file_path=rel,
+                                   start_line=start_line, content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RAILS_VALIDATION_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                field_name = "__unknown__"
+                if arg_list:
+                    first = next(
+                        (c for c in arg_list.children if c.type in ("simple_symbol", "string")), None
+                    )
+                    if first:
+                        field_name = first.text.decode("utf-8").lstrip(":").strip("'\"")
+                sym_id = f"{rel}#validation:{macro}:{field_name}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="validation",
+                                   name=field_name, macro=macro, file_path=rel,
+                                   start_line=start_line, content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RAILS_SCOPE_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                scope_name = "__unknown__"
+                if arg_list:
+                    sym_node = next(
+                        (c for c in arg_list.children if c.type in ("simple_symbol", "string")), None
+                    )
+                    if sym_node:
+                        scope_name = sym_node.text.decode("utf-8").lstrip(":").strip("'\"")
+                sym_id = f"{rel}#scope:{scope_name}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="scope",
+                                   name=scope_name, file_path=rel,
+                                   start_line=start_line, content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RUBY_MIXIN_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                mixin_name = "__unknown__"
+                if arg_list:
+                    const_node = next(
+                        (c for c in arg_list.children if c.type in ("constant", "scope_resolution")), None
+                    )
+                    if const_node:
+                        mixin_name = const_node.text.decode("utf-8")
+                sym_id = f"{rel}#mixin:{macro}:{mixin_name}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="mixin",
+                                   name=mixin_name, macro=macro, file_path=rel,
+                                   start_line=start_line, content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RUBY_ATTR_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                if arg_list:
+                    for sym_node in arg_list.children:
+                        if sym_node.type == "simple_symbol":
+                            attr_name = sym_node.text.decode("utf-8").lstrip(":")
+                            sym_id = f"{rel}#attr:{attr_name}"
+                            if not graph.has_node(sym_id):
+                                graph.add_node(sym_id, language="ruby", kind="attr",
+                                               name=attr_name, macro=macro,
+                                               file_path=rel, start_line=start_line,
+                                               content=content)
+                                graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RAILS_ENUM_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                enum_name = "__unknown__"
+                if arg_list:
+                    pair_node = next((c for c in arg_list.children if c.type == "pair"), None)
+                    sym_node = next((c for c in arg_list.children if c.type == "simple_symbol"), None)
+                    if pair_node:
+                        key = pair_node.children[0] if pair_node.children else None
+                        if key:
+                            enum_name = key.text.decode("utf-8").rstrip(":").lstrip(":")
+                    elif sym_node:
+                        enum_name = sym_node.text.decode("utf-8").lstrip(":")
+                sym_id = f"{rel}#enum:{enum_name}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="enum",
+                                   name=enum_name, file_path=rel,
+                                   start_line=start_line, content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RAILS_DELEGATION_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                method_sym = "__unknown__"
+                target_name: str | None = None
+                if arg_list:
+                    sym_node = next(
+                        (c for c in arg_list.children if c.type == "simple_symbol"), None
+                    )
+                    if sym_node:
+                        method_sym = sym_node.text.decode("utf-8").lstrip(":")
+                    to_pair = next(
+                        (c for c in arg_list.children
+                         if c.type == "pair" and c.children and
+                         c.children[0].text.decode("utf-8").rstrip(":") == "to"),
+                        None,
+                    )
+                    if to_pair and len(to_pair.children) >= 2:
+                        val = to_pair.children[-1]
+                        target_name = val.text.decode("utf-8").lstrip(":")
+                sym_id = f"{rel}#delegate:{method_sym}"
+                if not graph.has_node(sym_id):
+                    node_kw: dict[str, Any] = dict(
+                        language="ruby", kind="delegate",
+                        name=method_sym, file_path=rel,
+                        start_line=start_line, content=content,
+                    )
+                    if target_name:
+                        node_kw["target"] = target_name
+                    graph.add_node(sym_id, **node_kw)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            if macro in _RUBY_ALIAS_METHOD_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                if arg_list:
+                    syms = [c for c in arg_list.children if c.type == "simple_symbol"]
+                    if len(syms) >= 2:
+                        new_name = syms[0].text.decode("utf-8").lstrip(":")
+                        old_name = syms[1].text.decode("utf-8").lstrip(":")
+                        sym_id = f"{rel}#alias:{new_name}"
+                        if not graph.has_node(sym_id):
+                            graph.add_node(sym_id, language="ruby", kind="alias",
+                                           name=new_name, original=old_name,
+                                           file_path=rel, start_line=start_line,
+                                           content=content)
+                            graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+        elif node.type == "assignment":
+            lhs = node.children[0] if node.children else None
+            if lhs and lhs.type == "constant":
+                const_name = lhs.text.decode("utf-8")
+                namespace = "::".join(n for _, n in scope_stack)
+                qualified_const = f"{namespace}::{const_name}" if namespace else const_name
+                start_line = node.start_point[0] + 1
+                content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:500]
+                sym_id = f"{rel}#constant:{qualified_const}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="constant",
+                                   name=const_name, file_path=rel,
+                                   start_line=start_line, content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+            return
+
+        elif node.type == "alias":
+            id_children = [c for c in node.children if c.type == "identifier"]
+            if len(id_children) >= 2:
+                new_name = id_children[0].text.decode("utf-8")
+                old_name = id_children[1].text.decode("utf-8")
+                start_line = node.start_point[0] + 1
+                content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:500]
+                sym_id = f"{rel}#alias:{new_name}"
+                if not graph.has_node(sym_id):
+                    graph.add_node(sym_id, language="ruby", kind="alias",
+                                   name=new_name, original=old_name,
+                                   file_path=rel, start_line=start_line,
+                                   content=content)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+            return
+
+        for child in node.children:
+            self._walk_symbols(child, rel, graph, parent_id, scope_stack, source=source, top_level=top_level)
+
+    # ── CALLS ─────────────────────────────────────────────────────────────────
+
+    def find_calls(
+        self,
+        node: Any,
+        file_syms: dict[str, str],
+        imported_symbols: dict[str, str],
+        graph: DependencyGraph,
+    ) -> None:
+        if node.type in ("method", "singleton_method"):
+            name_node = next((c for c in node.children if c.type == "identifier"), None)
+            if name_node:
+                method_name = name_node.text.decode("utf-8")
+                caller_id = file_syms.get(method_name)
+                if not caller_id:
+                    for k, v in file_syms.items():
+                        if k.endswith(f".{method_name}"):
+                            caller_id = v
+                            break
+                if caller_id:
+                    all_call_symbols = {
+                        k: v for k, v in {**imported_symbols, **file_syms}.items()
+                        if v != caller_id
+                    }
+                    for child in node.children:
+                        self._walk_for_calls(child, caller_id, all_call_symbols, graph)
+            return
+        for child in node.children:
+            self.find_calls(child, file_syms, imported_symbols, graph)
+
+    def _walk_for_calls(
+        self,
+        node: Any,
+        caller_id: str,
+        imported_symbols: dict[str, str],
+        graph: DependencyGraph,
+    ) -> None:
+        if node.type == "call":
+            method_node = next((c for c in node.children if c.type == "identifier"), None)
+            if method_node:
+                self._emit_calls_edge(caller_id, method_node.text.decode("utf-8"), imported_symbols, graph)
+        elif node.type == "identifier":
+            self._emit_calls_edge(caller_id, node.text.decode("utf-8"), imported_symbols, graph)
+        for child in node.children:
+            self._walk_for_calls(child, caller_id, imported_symbols, graph)
+
+    def _emit_calls_edge(
+        self,
+        caller_id: str,
+        name: str,
+        imported_symbols: dict[str, str],
+        graph: DependencyGraph,
+    ) -> None:
+        if name in imported_symbols:
+            graph.add_edge(caller_id, imported_symbols[name], rel="CALLS")
+        else:
+            for k, v in imported_symbols.items():
+                if k.endswith(f".{name}"):
+                    graph.add_edge(caller_id, v, rel="CALLS")
+                    break
