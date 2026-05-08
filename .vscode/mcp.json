@@ -1,0 +1,23 @@
+{
+  "servers": {
+    "atlassian": {
+      "type": "http",
+      "url": "https://mcp.atlassian.com/v1/mcp"
+    },
+    "depgraph": {
+      "type": "http",
+      "url": "http://localhost:7832/sse"
+    },
+    "depgraph-stdio": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/Users/caiquesantos/.depgraph:/data",
+        "-v", "/Users/caiquesantos/code:/repos:ro",
+        "-e", "HOST_REPOS_PREFIX=/Users/caiquesantos/code",
+        "-e", "CONTAINER_REPOS_PATH=/repos",
+        "depgraph-mcp:latest"
+      ]
+    }
+  }
+}

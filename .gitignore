@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.Python
+
+# Hatch / pip
+*.whl
+pip-wheel-metadata/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+
+# Go
+cli/depgraph
+cli/fedora-nexus-core
+
+# Env / secrets
+.env
+!.env.example
+
+# Graph DB data
+.depgraph/
+.fedora-nexus-core/
+*.kuzu/
+
+# Model cache (fastembed / sentence-transformers)
+.cache/
+fastembed_cache/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Docker
+.dockerignore

@@ -1,0 +1,56 @@
+# depgraph MCP — Usage Instructions for Claude
+
+## Available MCP Tools
+
+Use these tools to understand code dependencies before making changes.
+
+### Before editing a file
+Always check blast radius:
+```
+blast_radius(root_path=".", changed_files=["path/to/file.py"])
+```
+
+### Finding what a file depends on
+```
+get_dependencies(root_path=".", file_path="path/to/file.py", depth=2)
+```
+
+### Finding what depends on a file
+```
+get_dependents(root_path=".", file_path="path/to/file.py")
+```
+
+### Cypher queries
+```
+query_graph(root_path=".", cypher="MATCH (n {path: 'src/auth.py'})-[:DEPENDS_ON*1..3]->(dep) RETURN dep")
+```
+
+### Index a new repository
+```
+index_repo(root_path="/path/to/repo")
+```
+
+## When to use depgraph
+
+- Before refactoring: run `blast_radius` on files you plan to change
+- Before deleting: run `get_dependents` to see what breaks
+- Understanding architecture: run `query_graph` with Cypher
+- Code review: run `blast_radius` on PR diff files
+
+---
+
+## CLI alternative (no MCP required)
+
+If MCP is unavailable, use the `depgraph` CLI — same tools, JSON output:
+
+```bash
+depgraph index /path/to/repo
+depgraph blast-radius /path/to/repo src/auth.py src/user.py
+depgraph deps /path/to/repo src/auth.py --depth 2
+depgraph dependents /path/to/repo src/auth.py
+depgraph search /path/to/repo "UserService"
+depgraph query /path/to/repo "MATCH (f:File) WHERE f.path CONTAINS 'auth' RETURN f"
+depgraph list
+```
+
+Exit code 0 = success, 1 = error. Output is always JSON.

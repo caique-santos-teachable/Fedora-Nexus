@@ -1,0 +1,453 @@
+"""Unit tests for KuzuGraphStore — no external service required."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from depgraph.graph.engine import DependencyGraph
+from depgraph.store.kuzu_store import KuzuGraphStore
+
+
+@pytest.fixture()
+def store(tmp_path):
+    s = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    s.init_schema()
+    return s
+
+
+@pytest.fixture()
+def sample_graph() -> DependencyGraph:
+    g = DependencyGraph()
+    g.add_node("src/a.py", language="python")
+    g.add_node("src/b.py", language="python")
+    g.add_node("src/c.py", language="python")
+    g.add_edge("src/a.py", "src/b.py")
+    g.add_edge("src/b.py", "src/c.py")
+    return g
+
+
+def test_save_and_load(store, sample_graph):
+    root = "/tmp/test_repo_001"
+    store.save_graph(root, sample_graph)
+    loaded = store.load_graph(root)
+    assert loaded is not None
+    assert loaded.has_node("src/a.py")
+    assert loaded.has_node("src/b.py")
+    assert loaded.has_node("src/c.py")
+    assert "src/b.py" in loaded.get_dependencies("src/a.py")
+    store.delete_repo(root)
+
+
+def test_repo_exists(store, sample_graph):
+    root = "/tmp/test_repo_002"
+    assert not store.repo_exists(root)
+    store.save_graph(root, sample_graph)
+    assert store.repo_exists(root)
+    store.delete_repo(root)
+    assert not store.repo_exists(root)
+
+
+def test_load_nonexistent_returns_none(store):
+    result = store.load_graph("/tmp/does_not_exist_xyz")
+    assert result is None
+
+
+def test_list_repos(store, sample_graph):
+    root = "/tmp/test_repo_003"
+    store.save_graph(root, sample_graph)
+    repos = store.list_repos()
+    paths = [r["root_path"] for r in repos]
+    assert root in paths
+    match = next(r for r in repos if r["root_path"] == root)
+    assert match["nodes"] == 3
+    assert match["edges"] == 2
+    store.delete_repo(root)
+
+
+def test_delete_nonexistent_returns_false(store):
+    assert not store.delete_repo("/tmp/never_existed_xyz")
+
+
+def test_stale_lock_file_removed_on_init(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    os.makedirs(db_path, exist_ok=True)
+    lock_file = os.path.join(db_path, ".lock")
+    open(lock_file, "w").close()  # create fake stale lock file
+
+    import kuzu
+    from unittest.mock import MagicMock
+
+    call_count = 0
+    mock_db_instance = MagicMock()
+
+    def mock_database(path):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("Could not set lock on file : " + path)
+        return mock_db_instance
+
+    monkeypatch.setattr(kuzu, "Database", mock_database)
+    monkeypatch.setattr(kuzu, "Connection", lambda db: MagicMock())
+
+    s = KuzuGraphStore(db_path=db_path)
+    assert not os.path.exists(lock_file)
+    assert call_count == 2
+    assert s._db is mock_db_instance
+
+
+def test_reset_db_wipes_and_reinitializes(tmp_path):
+    """After reset_db(), list_repos() returns empty list."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    g.add_node("foo.py", kind="file", language="python")
+    store.save_graph("/repo/foo", g)
+    assert len(store.list_repos()) == 1
+    store._embedding_cache["/repo/foo"] = ("fake", "data")
+    store.reset_db()
+    assert store.list_repos() == []
+    assert store._embedding_cache == {}
+
+
+def test_checkpoint_called_after_detach_delete(tmp_path, monkeypatch):
+    """CHECKPOINT is executed after DETACH DELETE to flush WAL."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    g.add_node("bar.py", kind="file", language="python")
+    store.save_graph("/repo/bar", g)
+
+    checkpoint_calls = []
+    original_execute = store._conn.execute
+
+    def patched_execute(query, params=None):
+        if "CHECKPOINT" in query.upper():
+            checkpoint_calls.append(query)
+        if params is not None:
+            return original_execute(query, params)
+        return original_execute(query)
+
+    monkeypatch.setattr(store._conn, "execute", patched_execute)
+    store._delete_repo_data("/repo/bar")
+    assert len(checkpoint_calls) >= 1
+
+
+# ------------------------------------------------------------------
+# Embedding store unit tests (no fastembed required)
+# ------------------------------------------------------------------
+
+def test_rrf_fuse_combines_both_lists():
+    """Items in BOTH lists must score higher than items in only ONE list."""
+    from depgraph.store.embedding_store import rrf_fuse
+    # "a" and "b" appear in both lists → dual boost
+    # "c" only in BM25, "d" only in semantic → single boost
+    bm25 = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    semantic = [("b", 0.9), ("a", 0.7), ("d", 0.5)]
+    fused = rrf_fuse(bm25, semantic, k=60)
+    ids = [f[0] for f in fused]
+
+    # Both "a" and "b" appear in both lists — must outrank single-list items
+    dual_list_items = {"a", "b"}
+    single_list_items = {"c", "d"}
+    top2 = set(ids[:2])
+    assert top2 == dual_list_items, f"Top 2 should be dual-list items a+b, got {top2}"
+    # "c" and "d" must be ranked below "a" and "b"
+    assert all(ids.index(s) > 1 for s in single_list_items if s in ids), \
+        f"Single-list items must rank below dual-list items: {ids}"
+
+
+def test_rrf_fuse_empty_semantic_returns_bm25_order():
+    """When semantic_results is empty, RRF output must preserve BM25 ranking."""
+    from depgraph.store.embedding_store import rrf_fuse
+    bm25 = [{"id": "x"}, {"id": "y"}, {"id": "z"}]
+    fused = rrf_fuse(bm25, [], k=60)
+    ids = [f[0] for f in fused]
+    assert ids == ["x", "y", "z"]
+
+
+def test_rrf_fuse_empty_bm25_returns_semantic_order():
+    """When bm25_results is empty, RRF output must reflect semantic ranking."""
+    from depgraph.store.embedding_store import rrf_fuse
+    semantic = [("p", 0.9), ("q", 0.8), ("r", 0.7)]
+    fused = rrf_fuse([], semantic, k=60)
+    ids = [f[0] for f in fused]
+    assert ids == ["p", "q", "r"]
+
+
+def test_index_path_is_deterministic():
+    """Same (db_path, root_path) must always produce the same index path."""
+    from depgraph.store.embedding_store import _index_path
+    p1 = _index_path("/data/depgraph.db", "/repos/myapp")
+    p2 = _index_path("/data/depgraph.db", "/repos/myapp")
+    assert p1 == p2
+
+
+def test_index_path_differs_for_different_repos():
+    """Different root_paths must produce different index paths."""
+    from depgraph.store.embedding_store import _index_path
+    p1 = _index_path("/data/depgraph.db", "/repos/app1")
+    p2 = _index_path("/data/depgraph.db", "/repos/app2")
+    assert p1 != p2
+
+
+def test_search_falls_back_to_bm25_when_no_embedding_index(store, tmp_path):
+    """search() must return BM25 results when no embedding index exists."""
+    g = DependencyGraph()
+    g.add_node("src/auth.py", language="python", kind="file", name="auth.py", content="auth module")
+    g.add_node("src/auth.py#function:login", language="python", kind="function",
+               name="login", file_path="src/auth.py", start_line=1, end_line=5,
+               content="def login(): pass", is_exported=True)
+    g.add_edge("src/auth.py", "src/auth.py#function:login", rel="CONTAINS")
+    root = "/tmp/test_search_fallback_001"
+    store.save_graph(root, g)
+
+    # Ensure no embedding index exists
+    from depgraph.store import embedding_store as emb
+    emb.delete_index(store._db_path, root)
+    store._embedding_cache.pop(root, None)
+
+    results = store.search(root, "login", limit=5)
+    assert len(results) >= 1
+    assert any(r["name"] == "login" for r in results), f"Expected 'login' in results: {results}"
+    store.delete_repo(root)
+
+
+def test_load_index_returns_none_when_not_built(tmp_path):
+    """load_index must return None when no .npz exists."""
+    from depgraph.store.embedding_store import load_index
+    result = load_index(str(tmp_path / "depgraph.db"), "/repos/nonexistent")
+    assert result is None
+
+
+def test_delete_index_is_noop_when_missing(tmp_path):
+    """delete_index must not raise when index file does not exist."""
+    from depgraph.store.embedding_store import delete_index
+    delete_index(str(tmp_path / "depgraph.db"), "/repos/nonexistent")  # must not raise
+
+
+def test_non_lock_runtime_error_re_raised(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+
+    import kuzu
+
+    monkeypatch.setattr(kuzu, "Database", lambda path: (_ for _ in ()).throw(RuntimeError("some other error")))
+
+    with pytest.raises(RuntimeError, match="some other error"):
+        KuzuGraphStore(db_path=db_path)
+
+    lock_file_1 = os.path.join(db_path, ".lock")
+    lock_file_2 = os.path.join(db_path, ".db.lock")
+    assert not os.path.exists(lock_file_1)
+    assert not os.path.exists(lock_file_2)
+
+
+def test_stale_lock_retry_also_fails(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "test.db")
+    os.makedirs(db_path, exist_ok=True)
+    lock_file = os.path.join(db_path, ".lock")
+    open(lock_file, "w").close()
+
+    import kuzu
+
+    monkeypatch.setattr(
+        kuzu,
+        "Database",
+        lambda path: (_ for _ in ()).throw(RuntimeError("Could not set lock on file : " + path)),
+    )
+
+    with pytest.raises(RuntimeError, match="Could not set lock"):
+        KuzuGraphStore(db_path=db_path)
+
+
+# ------------------------------------------------------------------
+# semantic_search unit tests (mocked model — no fastembed required)
+# ------------------------------------------------------------------
+
+def test_semantic_search_returns_empty_for_zero_norm_query():
+    """semantic_search must return [] when query vector norm is zero."""
+    import numpy as np
+    from depgraph.store.embedding_store import semantic_search
+    from unittest.mock import patch, MagicMock
+
+    ids = ["a", "b"]
+    vectors = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    zero_vec = np.array([0.0, 0.0], dtype=np.float32)
+
+    mock_model = MagicMock()
+    mock_model.embed.return_value = iter([zero_vec])
+
+    mock_fastembed = MagicMock()
+    mock_fastembed.TextEmbedding = MagicMock()
+
+    with patch.dict(__import__("sys").modules, {"fastembed": mock_fastembed}), \
+         patch("depgraph.store.embedding_store._get_model", return_value=mock_model):
+        result = semantic_search(ids, vectors, "anything", k=2)
+
+    assert result == []
+
+
+def test_semantic_search_ranks_by_cosine_similarity():
+    """semantic_search must return ids sorted by cosine similarity descending."""
+    import numpy as np
+    from depgraph.store.embedding_store import semantic_search
+    from unittest.mock import patch, MagicMock
+
+    # id "b" is aligned with query, "a" is orthogonal
+    ids = ["a", "b"]
+    vectors = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    query_vec = np.array([0.0, 1.0], dtype=np.float32)  # perfectly aligned with "b"
+
+    mock_model = MagicMock()
+    mock_model.embed.return_value = iter([query_vec])
+
+    mock_fastembed = MagicMock()
+    mock_fastembed.TextEmbedding = MagicMock()
+
+    with patch.dict(__import__("sys").modules, {"fastembed": mock_fastembed}), \
+         patch("depgraph.store.embedding_store._get_model", return_value=mock_model):
+        result = semantic_search(ids, vectors, "query", k=2)
+
+    assert result[0][0] == "b", f"Expected 'b' as top result, got {result}"
+    assert result[1][0] == "a"
+
+
+# ------------------------------------------------------------------
+# build_index unit tests (mocked model — no fastembed required)
+# ------------------------------------------------------------------
+
+def test_build_index_returns_false_for_empty_symbols(tmp_path):
+    """build_index must return False when no symbols are provided."""
+    from depgraph.store import embedding_store as emb
+    result = emb.build_index(str(tmp_path / "depgraph.db"), "/repos/test", [])
+    assert result is False
+
+
+def test_build_index_saves_npz_and_returns_true(tmp_path):
+    """build_index must save a .npz file and return True when model is available."""
+    import numpy as np
+    from unittest.mock import patch, MagicMock
+    from depgraph.store import embedding_store as emb
+
+    symbols = [
+        {"id": "repo::src/a.py#function:foo", "name": "foo", "content": "def foo(): pass"},
+        {"id": "repo::src/b.py#class:Bar", "name": "Bar", "content": "class Bar: pass"},
+    ]
+    fake_vectors = np.array([[0.1] * 384, [0.2] * 384], dtype=np.float32)
+    mock_model = MagicMock()
+    mock_model.embed.return_value = iter(fake_vectors)
+
+    mock_fastembed = MagicMock()
+    mock_fastembed.TextEmbedding = MagicMock()
+
+    db_path = str(tmp_path / "depgraph.db")
+    with patch.dict(__import__("sys").modules, {"fastembed": mock_fastembed}), \
+         patch("depgraph.store.embedding_store._get_model", return_value=mock_model):
+        result = emb.build_index(db_path, "/repos/test", symbols)
+
+    assert result is True
+    idx_path = emb._index_path(db_path, "/repos/test")
+    assert idx_path.exists(), f"Expected .npz at {idx_path}"
+    data = np.load(str(idx_path))
+    assert list(data["ids"]) == [s["id"] for s in symbols]
+    assert data["vectors"].shape == (2, 384)
+
+
+def test_overwrite_save(store, sample_graph):
+    root = "/tmp/test_repo_004"
+    store.save_graph(root, sample_graph)
+    # Save a smaller graph over the same root
+    g2 = DependencyGraph()
+    g2.add_node("only.py", language="python")
+    store.save_graph(root, g2)
+    loaded = store.load_graph(root)
+    assert loaded is not None
+    assert loaded.has_node("only.py")
+    assert not loaded.has_node("src/a.py")
+    store.delete_repo(root)
+
+
+def test_get_indexed_at(store, sample_graph):
+    root = "/tmp/test_repo_005"
+    assert store.get_indexed_at(root) is None
+    store.save_graph(root, sample_graph)
+    indexed_at = store.get_indexed_at(root)
+    assert indexed_at is not None
+    assert "T" in indexed_at  # ISO format
+    store.delete_repo(root)
+
+
+def test_edge_rel_preservation(store):
+    root = "/tmp/test_repo_006"
+    g = DependencyGraph()
+    g.add_node("a.py", language="python")
+    g.add_node("b.py", language="python")
+    g.add_edge("a.py", "b.py", rel="IMPORTS")
+    store.save_graph(root, g)
+    loaded = store.load_graph(root)
+    assert loaded is not None
+    assert "b.py" in loaded.get_dependencies("a.py")
+    store.delete_repo(root)
+
+
+def test_rich_schema_saves_function_with_content(tmp_path):
+    from depgraph.graph.engine import DependencyGraph
+    from depgraph.store.kuzu_store import KuzuGraphStore
+    g = DependencyGraph()
+    g.add_node("src/app.py", language="python", kind="file", name="app.py", content="# app")
+    g.add_node("src/app.py#function:greet", language="python", kind="function",
+               name="greet", file_path="src/app.py", start_line=1, end_line=3,
+               content="def greet(): pass", is_exported=False)
+    g.add_edge("src/app.py", "src/app.py#function:greet", rel="CONTAINS")
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    root = "/repo/test"
+    store.save_graph(root, g)
+    loaded = store.load_graph(root)
+    assert loaded is not None
+    assert loaded.has_node("src/app.py#function:greet")
+    attrs = loaded.node_attrs("src/app.py#function:greet")
+    assert attrs["name"] == "greet"
+    assert "greet" in attrs["content"]
+    assert attrs["start_line"] == 1
+
+
+def test_schema_version_error_on_old_schema(tmp_path):
+    from depgraph.store.kuzu_store import KuzuGraphStore, SchemaVersionError
+    from unittest.mock import MagicMock, patch
+
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+
+    original_execute = store._conn.execute
+
+    def fake_execute(query, params=None):
+        if "MATCH (n:Node)" in query:
+            mock_result = MagicMock()
+            mock_result.has_next.return_value = True
+            mock_result.get_next.return_value = [0]
+            return mock_result
+        return original_execute(query, params) if params else original_execute(query)
+
+    with patch.object(store._conn, "execute", side_effect=fake_execute):
+        with pytest.raises(SchemaVersionError):
+            store.init_schema()
+
+
+@pytest.mark.integration
+def test_search_returns_function_by_name(tmp_path):
+    from depgraph.graph.engine import DependencyGraph
+    from depgraph.store.kuzu_store import KuzuGraphStore
+    g = DependencyGraph()
+    g.add_node("src/auth.py", language="python", kind="file", name="auth.py", content="# auth module")
+    g.add_node("src/auth.py#function:authenticate", language="python", kind="function",
+               name="authenticate", file_path="src/auth.py", start_line=1, end_line=5,
+               content="def authenticate(user, pw): return True", is_exported=False)
+    g.add_edge("src/auth.py", "src/auth.py#function:authenticate", rel="CONTAINS")
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    root = "/repo/myapp"
+    store.save_graph(root, g)
+    results = store.search(root, "authenticate")
+    names = [r["name"] for r in results]
+    assert "authenticate" in names
+    assert results[0]["rank"] == 1
