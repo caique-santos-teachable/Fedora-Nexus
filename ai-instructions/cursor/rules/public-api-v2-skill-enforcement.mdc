@@ -1,0 +1,22 @@
+---
+description: Enforce mandatory Public API V2 implementation QA skill usage.
+priority: 1
+alwaysApply: true
+---
+
+# Public API V2 Skill Enforcement
+
+When the task involves implementation in Public API V2 (controllers, handlers, serializers, queries, routes, OpenAPI, or endpoint behavior), the agent must load and follow:
+
+- `~/.cursor/skills/development-and-validation-loop/SKILL.md`
+
+Mandatory requirements for those tasks:
+
+1. Add/update tests with 100% coverage target for changed Public API V2 files.
+2. Create/update deterministic seed based on depgraph + traditional code search.
+3. Execute seed successfully.
+4. Execute curl validation matrix against `http://developers.worksonmy.computer:3000/` unless the user explicitly provides another base URL.
+5. Compare curl outputs vs expected behavior from routes + seed + contract.
+6. Generate local report at `tmp/agents-reports/<ticket-id>/<incremental-report-name>.md` (for example `tmp/agents-reports/iw-3133/01-validation-report.md`).
+
+Do not mark Public API V2 implementation complete until all steps are finished and passing.
