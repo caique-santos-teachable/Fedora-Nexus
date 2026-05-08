@@ -12,9 +12,9 @@
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "-v", "/Users/caiquesantos/.depgraph:/data",
-        "-v", "/Users/caiquesantos/code:/repos:ro",
-        "-e", "HOST_REPOS_PREFIX=/Users/caiquesantos/code",
+        "-v", "${env:HOME}/.depgraph:/data",
+        "-v", "${env:HOME}/code:/repos:ro",
+        "-e", "HOST_REPOS_PREFIX=${env:HOME}/code",
         "-e", "CONTAINER_REPOS_PATH=/repos",
         "depgraph-mcp:latest"
       ]

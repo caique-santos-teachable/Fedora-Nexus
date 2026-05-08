@@ -1,0 +1,95 @@
+---
+name: depgraph-pr-review
+description: "Use when: reviewing a pull request, assessing risk before merging, or checking the blast radius of a diff. Examples: 'Review this PR', 'What does this change affect?', 'Is this PR safe to merge?'"
+---
+
+# PR Review with depgraph
+
+## When to use
+
+- "Review this PR"
+- "What does this change affect?"
+- "Is this safe to merge?"
+- "What's the blast radius of this PR?"
+- Reviewing code changes before merge
+
+## Workflow
+
+```
+1. Get changed files: `git diff --name-only origin/main...HEAD`
+2. blast_radius({ changed_files: [<list of changed files>] })   → Full impact map
+3. get_dependents on each key changed file                       → Direct importers
+4. query_graph — caller chains for changed symbols (if indexed)
+5. Assess risk level and write review summary
+```
+
+## Checklist
+
+```
+- [ ] Get the list of changed files from git diff
+- [ ] blast_radius on ALL changed files at once
+- [ ] Review d=1 items — are they updated in the PR or will they break?
+- [ ] Review d=2 items — anything unexpected?
+- [ ] query_graph caller chains for non-trivial changed functions
+- [ ] search for changed symbol names to find any missed references
+- [ ] Assess risk level (see table below)
+- [ ] Write review summary: risk, what breaks, what to verify
+```
+
+## Risk assessment
+
+| Signal | Risk |
+|--------|------|
+| <3 files, same module, d=1 all in PR | LOW |
+| 3–10 files, 2–3 modules | MEDIUM |
+| >10 files or cross-cutting | HIGH |
+| Auth, payments, or data integrity | CRITICAL |
+| d=1 callers exist outside the PR diff | **Potential breakage — flag it** |
+
+## Tools in practice
+
+**blast_radius** — the primary PR review tool:
+```
+blast_radius({
+  root_path: "/repos/myapp",
+  changed_files: [
+    "src/auth/validators.py",
+    "src/auth/login.py"
+  ],
+  max_depth: 3
+})
+→ d=1: middleware.py, test_auth.py, routes/auth.py
+→ d=2: app.py, test_routes.py
+→ Total affected: 5 files
+```
+
+**query_graph** — check callers of changed symbols:
+```cypher
+MATCH (caller)-[r:CodeRelation {type: 'CALLS'}]->(f:Function {name: "validate_token"})
+RETURN caller.name, caller.file_path
+```
+
+**search** — find any missed references to a renamed/changed symbol:
+```
+search({ root_path: "/repos/myapp", query: "validate_token" })
+```
+
+## Example: PR changes auth/validators.py and auth/login.py
+
+```
+1. Changed files: src/auth/validators.py, src/auth/login.py
+
+2. blast_radius({ changed_files: ["src/auth/validators.py", "src/auth/login.py"] })
+   → d=1: src/api/middleware.py, tests/test_auth.py, src/routes/auth.py
+   → d=2: src/app.py
+
+3. Check: is middleware.py updated in the PR?
+   → No → FLAG: middleware.py calls validate_user (d=1, WILL BREAK)
+
+4. query_graph — callers of changed symbols
+   → validate_user: login_handler ✓ (in PR), api_middleware ✗ (NOT in PR)
+
+5. Risk: MEDIUM
+   Finding: api_middleware.py calls validate_user but is not updated in this PR.
+   Action: Ask author to update middleware.py or confirm it handles the API change.
+```

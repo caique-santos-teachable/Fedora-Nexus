@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.WARNING)
 from depgraph.graph.engine import DependencyGraph
 from depgraph.indexer.ruby_indexer import RubyIndexer
 
-ROOT = "/Users/caiquesantos/code/v0/fedora"
+ROOT = str(Path.home() / "code/v0/fedora")
 GRAPH_PATH = Path(ROOT) / ".depgraph" / "graph.json"
 
 print(f"Indexing Ruby files in {ROOT} ...")
