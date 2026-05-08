@@ -6,10 +6,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from depgraph.graph.engine import DependencyGraph
-from depgraph.graph.blast_radius import blast_radius
+from fedora_nexus.graph.engine import DependencyGraph
+from fedora_nexus.graph.blast_radius import blast_radius
 
-GRAPH_PATH = str(Path.home() / "code/v0/fedora/.depgraph/graph.json")
+GRAPH_PATH = str(Path.home() / "code/v0/fedora/.fedora-nexus/graph.json")
 
 graph = DependencyGraph.load(GRAPH_PATH)
 

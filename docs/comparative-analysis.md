@@ -1,11 +1,11 @@
-# Análise Comparativa: depgraph vs GitNexus
-> Data: Maio 2026 | Propósito: Identificar gaps de performance e assertividade para evolução do depgraph
+# Análise Comparativa: fedora-nexus vs GitNexus
+> Data: Maio 2026 | Propósito: Identificar gaps de performance e assertividade para evolução do fedora-nexus
 
 ---
 
 ## Sumário Executivo
 
-O depgraph e o GitNexus resolvem o mesmo problema: construir grafos de dependência de código para navegação e análise. Ambos usam tree-sitter para parsing e grafos com Cypher. Mas a distância em performance e assertividade vem de escolhas arquiteturais fundamentais — não de detalhes de implementação.
+O fedora-nexus e o GitNexus resolvem o mesmo problema: construir grafos de dependência de código para navegação e análise. Ambos usam tree-sitter para parsing e grafos com Cypher. Mas a distância em performance e assertividade vem de escolhas arquiteturais fundamentais — não de detalhes de implementação.
 
 Este relatório mapeia cada gap técnico com proposta concreta de melhoria.
 
@@ -13,7 +13,7 @@ Este relatório mapeia cada gap técnico com proposta concreta de melhoria.
 
 ## 1. Representação do Grafo
 
-### depgraph (atual)
+### fedora-nexus (atual)
 - **Engine**: NetworkX `nx.DiGraph` in-memory
 - **Node types**: `file`, `function`, `class`, `method`, `module`, `hook` — 6 tipos
 - **Edge types**: `DEPENDS_ON`, `CONTAINS`, `CALLS` — 3 tipos
@@ -30,13 +30,13 @@ Este relatório mapeia cada gap técnico com proposta concreta de melhoria.
   - `Map<filePath, Set<nodeId>>` — invalidação por arquivo O(file-nodes)
 
 ### Gap Crítico
-O depgraph usa NetworkX que exige iteração O(n) para a maioria das operações de filtro. Sem índices por tipo de aresta ou por arquivo, qualquer consulta passa pelo grafo inteiro. GitNexus resolve isso com multi-index mantido consistentemente em cada mutação.
+O fedora-nexus usa NetworkX que exige iteração O(n) para a maioria das operações de filtro. Sem índices por tipo de aresta ou por arquivo, qualquer consulta passa pelo grafo inteiro. GitNexus resolve isso com multi-index mantido consistentemente em cada mutação.
 
 ---
 
 ## 2. Pipeline de Indexação
 
-### depgraph (atual)
+### fedora-nexus (atual)
 - **Passes**: 3 passes sequenciais (file collection → symbol extraction → CALLS edges)
 - **Concorrência**: single-threaded; apenas `asyncio.to_thread()` para não bloquear o servidor MCP
 - **Linguagens**: 4 (Python, TypeScript, JavaScript, Ruby)
@@ -53,13 +53,13 @@ O depgraph usa NetworkX que exige iteração O(n) para a maioria das operações
 - **Incremental**: `removeNodesByFile(path)` → re-parse apenas arquivo modificado
 
 ### Gap Crítico
-O maior gargalo do depgraph em repositórios grandes é o single-threading. GitNexus paraleliza no nível do worker OS, não apenas coroutines asyncio. A falta de resolução de CALLS para TypeScript/Ruby deixa ~60% das arestas semânticas faltando nos repos mais comuns.
+O maior gargalo do fedora-nexus em repositórios grandes é o single-threading. GitNexus paraleliza no nível do worker OS, não apenas coroutines asyncio. A falta de resolução de CALLS para TypeScript/Ruby deixa ~60% das arestas semânticas faltando nos repos mais comuns.
 
 ---
 
 ## 3. Busca e Navegação
 
-### depgraph (atual)
+### fedora-nexus (atual)
 - **Mecanismo**: BM25 via Kuzu FTS indexes (keyword only)
 - **Cypher**: subset próprio parseado com Lark; execução via NetworkX
 - **Blast radius**: BFS simples sobre arestas reversas
@@ -74,13 +74,13 @@ O maior gargalo do depgraph em repositórios grandes é o single-threading. GitN
 - **Community detection**: algoritmo de Leiden (graphology); detecta clusters funcionais; resultado exposto via `MEMBER_OF` edges
 
 ### Gap Crítico
-Busca só por keyword retorna resultados por correspondência textual — não por relevância semântica. Um dev buscando "user authentication flow" no depgraph retorna arquivos com essas palavras; no GitNexus retorna os símbolos semanticamente mais próximos, mesmo que nomeados `AuthController.validate()`. A diferença de "assertividade" que o usuário percebe vem quase inteiramente daqui.
+Busca só por keyword retorna resultados por correspondência textual — não por relevância semântica. Um dev buscando "user authentication flow" no fedora-nexus retorna arquivos com essas palavras; no GitNexus retorna os símbolos semanticamente mais próximos, mesmo que nomeados `AuthController.validate()`. A diferença de "assertividade" que o usuário percebe vem quase inteiramente daqui.
 
 ---
 
 ## 4. Tecnologias
 
-| Componente | depgraph | GitNexus |
+| Componente | fedora-nexus | GitNexus |
 |-----------|----------|----------|
 | Linguagem principal | Python | TypeScript |
 | Grafo in-memory | NetworkX nx.DiGraph | Custom multi-index Map |
@@ -103,7 +103,7 @@ Busca só por keyword retorna resultados por correspondência textual — não p
 ### 🔴 Impacto Alto (afeta diretamente assertividade percebida)
 
 #### G1 — Busca Semântica ausente
-O depgraph não tem embeddings. A busca retorna apenas correspondências de substring em nome e conteúdo.  
+O fedora-nexus não tem embeddings. A busca retorna apenas correspondências de substring em nome e conteúdo.  
 **Proposta**: integrar `sentence-transformers` com modelo leve (all-MiniLM-L6-v2 ou nomic-embed-text-v1.5) para gerar embeddings de símbolos. Armazenar no Kuzu com HNSW via `pg_vector` ou em arquivo FAISS/HNSWlib local. Aplicar RRF para fusão com BM25.
 
 #### G2 — CALLS edges ausentes para TypeScript/JavaScript/Ruby
@@ -111,7 +111,7 @@ Sem arestas de chamada para as linguagens mais comuns, blast radius e context n�
 **Proposta**: implementar call extraction para TypeScript/JavaScript via tree-sitter seguindo o mesmo padrão Python. Para TypeScript, usar `call_expression` + `new_expression` nodes no AST. Para Ruby, usar `call` node.
 
 #### G3 — Sem resolução de tipos cross-file
-O depgraph resolve imports mas não propaga tipos entre arquivos. Um método `UserService.save()` chamado em `orders.ts` não é conectado à definição real em `user_service.ts`.  
+O fedora-nexus resolve imports mas não propaga tipos entre arquivos. Um método `UserService.save()` chamado em `orders.ts` não é conectado à definição real em `user_service.ts`.  
 **Proposta**: implementar uma fase de "binding accumulator" após o parse: para cada call node não-resolvido, buscar no grafo de imports o símbolo mais próximo por nome.
 
 ### 🟡 Impacto Médio (afeta performance e cobertura)
@@ -200,9 +200,9 @@ Não há aviso ao usuário quando o grafo está desatualizado em relação ao es
 Esta análise não propõe clonar GitNexus. As melhorias listadas são:
 - Uso de tecnologias open-source independentes (sentence-transformers, HNSWlib, ProcessPoolExecutor, Leiden via networkx)
 - Patterns arquiteturais não-proprietários (multi-index, RRF, incremental indexing por mtime)
-- Extensões naturais do que o depgraph já faz — mas feitas com mais profundidade
+- Extensões naturais do que o fedora-nexus já faz — mas feitas com mais profundidade
 
-O depgraph tem vantagem no stack Python (melhor interop com ferramentas de análise estática existentes, mais fácil integrar com outras libs do ecossistema de AI/ML) e na simplicidade do deploy (sem Node.js, sem build step). Isso deve ser preservado.
+O fedora-nexus tem vantagem no stack Python (melhor interop com ferramentas de análise estática existentes, mais fácil integrar com outras libs do ecossistema de AI/ML) e na simplicidade do deploy (sem Node.js, sem build step). Isso deve ser preservado.
 
 ---
 

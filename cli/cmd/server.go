@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"depgraph/internal/client"
-	"depgraph/internal/ui"
+	"fedora-nexus/internal/client"
+	"fedora-nexus/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -22,24 +22,24 @@ func init() {
 	rootCmd.AddCommand(serverStatusCmd)
 }
 
-// dataDir returns the depgraph data directory (~/.local/share/depgraph).
+// dataDir returns the fedora-nexus data directory (~/.local/share/fedora-nexus).
 func dataDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "depgraph")
+	return filepath.Join(home, ".local", "share", "fedora-nexus")
 }
 
-// composeFile resolves the depgraph docker-compose.yml path.
+// composeFile resolves the fedora-nexus docker-compose.yml path.
 // Search order:
-//  1. DEPGRAPH_COMPOSE_FILE env var (explicit override)
-//  2. ~/.local/share/depgraph/docker-compose.yml (installed by setup.sh)
+//  1. FEDORA_NEXUS_COMPOSE_FILE env var (explicit override)
+//  2. ~/.local/share/fedora-nexus/docker-compose.yml (installed by setup.sh)
 //  3. Current working directory walking up (works when run from the repo)
 func composeFile() (string, error) {
 	// 1. Explicit override.
-	if from := os.Getenv("DEPGRAPH_COMPOSE_FILE"); from != "" {
+	if from := os.Getenv("FEDORA_NEXUS_COMPOSE_FILE"); from != "" {
 		if _, err := os.Stat(from); err == nil {
 			return from, nil
 		}
-		return "", fmt.Errorf("DEPGRAPH_COMPOSE_FILE=%s: file not found", from)
+		return "", fmt.Errorf("FEDORA_NEXUS_COMPOSE_FILE=%s: file not found", from)
 	}
 
 	// 2. Known data directory (populated by setup.sh).
@@ -65,11 +65,11 @@ func composeFile() (string, error) {
 
 	return "", fmt.Errorf(
 		"docker-compose.yml not found.\n"+
-			"  Tip: re-run setup.sh to install it, or set DEPGRAPH_COMPOSE_FILE=/path/to/docker-compose.yml",
+			"  Tip: re-run setup.sh to install it, or set FEDORA_NEXUS_COMPOSE_FILE=/path/to/docker-compose.yml",
 	)
 }
 
-// dockerCompose runs docker compose with the depgraph compose file and streams output.
+// dockerCompose runs docker compose with the fedora-nexus compose file and streams output.
 func dockerCompose(args ...string) error {
 	cf, err := composeFile()
 	if err != nil {
@@ -84,11 +84,11 @@ func dockerCompose(args ...string) error {
 
 var serverStartCmd = &cobra.Command{
 	Use:   "server-start",
-	Short: "Start the depgraph server container",
+	Short: "Start the fedora-nexus server container",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println()
-		fmt.Println("  " + ui.TitleStyle.Render("Starting depgraph server..."))
+		fmt.Println("  " + ui.TitleStyle.Render("Starting fedora-nexus server..."))
 		fmt.Println()
 
 		if err := dockerCompose("up", "-d", "mcp-server"); err != nil {
@@ -115,7 +115,7 @@ var serverStartCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Println()
 		fmt.Println(ui.WarnStyle.Render("  !  Server started but health check timed out."))
-		fmt.Println(ui.MutedStyle.Render("     Check status with: depgraph server-status"))
+		fmt.Println(ui.MutedStyle.Render("     Check status with: fedora-nexus server-status"))
 		fmt.Println()
 		return nil
 	},
@@ -123,11 +123,11 @@ var serverStartCmd = &cobra.Command{
 
 var serverStopCmd = &cobra.Command{
 	Use:   "server-stop",
-	Short: "Stop the depgraph server container",
+	Short: "Stop the fedora-nexus server container",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println()
-		fmt.Println("  " + ui.TitleStyle.Render("Stopping depgraph server..."))
+		fmt.Println("  " + ui.TitleStyle.Render("Stopping fedora-nexus server..."))
 		fmt.Println()
 
 		if err := dockerCompose("stop", "mcp-server"); err != nil {
@@ -142,11 +142,11 @@ var serverStopCmd = &cobra.Command{
 
 var serverRemoveCmd = &cobra.Command{
 	Use:   "server-remove",
-	Short: "Stop and remove the depgraph server container and volumes",
+	Short: "Stop and remove the fedora-nexus server container and volumes",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println()
-		fmt.Println("  " + ui.TitleStyle.Render("Removing depgraph server..."))
+		fmt.Println("  " + ui.TitleStyle.Render("Removing fedora-nexus server..."))
 		fmt.Println()
 
 		if err := dockerCompose("down", "--remove-orphans"); err != nil {
@@ -161,7 +161,7 @@ var serverRemoveCmd = &cobra.Command{
 
 var serverStatusCmd = &cobra.Command{
 	Use:   "server-status",
-	Short: "Show depgraph server container status",
+	Short: "Show fedora-nexus server container status",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println()
@@ -197,7 +197,7 @@ var serverStatusCmd = &cobra.Command{
 		}
 
 		fmt.Println()
-		fmt.Println("  " + ui.MutedStyle.Render("OS: "+runtime.GOOS+"  Arch: "+runtime.GOARCH+"  depgraph CLI "+cliVersion()))
+		fmt.Println("  " + ui.MutedStyle.Render("OS: "+runtime.GOOS+"  Arch: "+runtime.GOARCH+"  fedora-nexus CLI "+cliVersion()))
 		fmt.Println()
 		return nil
 	},
@@ -205,7 +205,7 @@ var serverStatusCmd = &cobra.Command{
 
 func cliVersion() string {
 	// Read from embedded version or environment; placeholder for now.
-	if v := os.Getenv("DEPGRAPH_VERSION"); v != "" {
+	if v := os.Getenv("FEDORA_NEXUS_VERSION"); v != "" {
 		return v
 	}
 	return "dev"

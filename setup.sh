@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================================
-# depgraph — Setup & Agent Configuration
+# fedora-nexus — Setup & Agent Configuration
 # =============================================================================
 # Usage: bash setup.sh
 #
 # Architecture:
-#   The depgraph server (+ Kuzu database) runs in a Docker container.
+#   The fedora-nexus server (+ Kuzu database) runs in a Docker container.
 #   The CLI is a thin HTTP client that talks to the container.
 #
 #   Server:  docker compose up -d mcp-server   (port 7832)
-#   CLI:     depgraph <command>                 (auto-detects the server)
+#   CLI:     fedora-nexus <command>                 (auto-detects the server)
 #
 #   If the server is unreachable the CLI falls back to local in-process mode.
-#   To force a specific server: export DEPGRAPH_SERVER_URL=http://host:7832
+#   To force a specific server: export FEDORA_NEXUS_SERVER_URL=http://host:7832
 #
 # This script:
-#   1. Installs the depgraph CLI (puts `depgraph` in PATH via ~/.local/bin)
+#   1. Installs the fedora-nexus CLI (puts `fedora-nexus` in PATH via ~/.local/bin)
 #   2. Copies the appropriate skill/instruction files to the right location
 #      based on the AI agent you use (Claude Code, Cursor, Copilot, Windsurf,
 #      or other agents that use the CLI directly)
@@ -107,16 +107,16 @@ install_go_cli() {
   if ! go_cmd="$(find_go)"; then
     warn "Go >=1.22 not found — skipping TUI CLI build."
     warn "Install Go from https://go.dev/dl/, then re-run setup.sh."
-    warn "The Python CLI (depgraph) is still available as a fallback."
+    warn "The Python CLI (fedora-nexus) is still available as a fallback."
     return
   fi
 
-  step "Building depgraph TUI CLI (Go + Bubble Tea)..."
+  step "Building fedora-nexus TUI CLI (Go + Bubble Tea)..."
   info "Using Go: $(command -v "$go_cmd") ($("$go_cmd" version))"
 
   local cli_dir="$REPO_DIR/cli"
   local bin_dir="$HOME/.local/bin"
-  local data_dir="$HOME/.local/share/depgraph"
+  local data_dir="$HOME/.local/share/fedora-nexus"
   mkdir -p "$bin_dir" "$data_dir"
 
   # Copy docker-compose.yml to the known data dir so the CLI can find it
@@ -127,8 +127,8 @@ install_go_cli() {
   (
     cd "$cli_dir"
     "$go_cmd" mod tidy --quiet 2>/dev/null || true
-    if "$go_cmd" build -o "$bin_dir/depgraph" . ; then
-      info "Go CLI built → $bin_dir/depgraph"
+    if "$go_cmd" build -o "$bin_dir/fedora-nexus" . ; then
+      info "Go CLI built → $bin_dir/fedora-nexus"
     else
       warn "Go build failed — Python CLI remains as fallback."
     fi
@@ -154,7 +154,7 @@ install_docker_server() {
     return
   fi
 
-  step "Building depgraph server image..."
+  step "Building fedora-nexus server image..."
   if (cd "$REPO_DIR" && $compose_cmd build --no-cache mcp-server); then
     info "Image built successfully."
   else
@@ -163,7 +163,7 @@ install_docker_server() {
     return
   fi
 
-  step "Starting depgraph server container (detached)..."
+  step "Starting fedora-nexus server container (detached)..."
   if (cd "$REPO_DIR" && $compose_cmd up -d mcp-server); then
     info "Server container started (port 7832)."
     info "Check status with: docker compose ps"
@@ -194,7 +194,7 @@ find_python() {
 }
 
 install_package() {
-  step "Installing depgraph package..."
+  step "Installing fedora-nexus package..."
 
   local py
   if ! py="$(find_python)"; then
@@ -206,7 +206,7 @@ install_package() {
 
   info "Using interpreter: $(command -v "$py") ($("$py" --version))"
 
-  local venv_dir="$HOME/.local/depgraph-venv"
+  local venv_dir="$HOME/.local/fedora-nexus-venv"
   local bin_dir="$HOME/.local/bin"
 
   # Create isolated venv if it doesn't exist (or if Python changed)
@@ -221,14 +221,14 @@ install_package() {
 
   # Expose the CLI binary via a symlink in ~/.local/bin (which is usually in PATH)
   mkdir -p "$bin_dir"
-  ln -sf "$venv_dir/bin/depgraph" "$bin_dir/depgraph"
-  info "Symlinked depgraph → $bin_dir/depgraph"
+  ln -sf "$venv_dir/bin/fedora-nexus" "$bin_dir/fedora-nexus"
+  info "Symlinked fedora-nexus → $bin_dir/fedora-nexus"
 
   echo ""
-  if command -v depgraph &>/dev/null; then
-    info "depgraph CLI available at: $(command -v depgraph)"
+  if command -v fedora-nexus &>/dev/null; then
+    info "fedora-nexus CLI available at: $(command -v fedora-nexus)"
   else
-    warn "depgraph is installed but ~/.local/bin is not in your PATH."
+    warn "fedora-nexus is installed but ~/.local/bin is not in your PATH."
     warn "Add this line to your ~/.zshrc or ~/.bashrc, then restart your terminal:"
     warn ""
     warn "    export PATH=\"\$HOME/.local/bin:\$PATH\""
@@ -358,22 +358,22 @@ configure_windsurf() {
 
 configure_cli_only() {
   step "CLI-only setup..."
-  info "No agent config file needed — the depgraph CLI is your interface."
-  info "Reference: $SKILLS_DIR/depgraph.skill.md"
+  info "No agent config file needed — the fedora-nexus CLI is your interface."
+  info "Reference: $SKILLS_DIR/fedora-nexus.skill.md"
   echo ""
   echo "  Quick start:"
-  echo "    depgraph index /path/to/your/repo"
-  echo "    depgraph blast-radius /path/to/your/repo src/main.py"
-  echo "    depgraph --help"
+  echo "    fedora-nexus index /path/to/your/repo"
+  echo "    fedora-nexus blast-radius /path/to/your/repo src/main.py"
+  echo "    fedora-nexus --help"
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 echo ""
 banner "==========================================="
-banner "  depgraph — Setup & Agent Configuration"
+banner "  fedora-nexus — Setup & Agent Configuration"
 banner "==========================================="
 echo ""
-echo "  This script installs the depgraph CLI and configures your AI agent"
+echo "  This script installs the fedora-nexus CLI and configures your AI agent"
 echo "  to use it as a code dependency analysis tool."
 echo ""
 echo "  Which AI agent do you use?"
@@ -422,7 +422,7 @@ echo ""
 banner "==========================================="
 info "Setup complete!"
 echo ""
-echo "  Run 'depgraph --help' to see all available commands."
+echo "  Run 'fedora-nexus --help' to see all available commands."
   echo "  Reference docs: $AI_DIR/"
 banner "==========================================="
 echo ""

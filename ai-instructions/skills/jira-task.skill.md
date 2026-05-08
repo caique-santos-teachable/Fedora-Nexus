@@ -28,12 +28,12 @@ Implement work described by a Jira ticket-id. Follow the Orchestrator workflow: 
 
 Before writing the implementation brief, gather:
 - The Jira ticket details using the provided ticket-id (title, acceptance criteria, constraints, and expected behavior).
-- Maximum dependency context necessary using depgraph skills:
-  - `depgraph-guide` for available graph tools/query shape;
-  - `depgraph-exploring` (and/or `depgraph`) to locate existing flow and architecture touchpoints;
-  - `depgraph-impact` to estimate blast radius and dependent files before edits;
-  - `depgraph-refactoring` when task scope includes rename/extract/move/split/restructure;
-  - `depgraph-pr-review` when producing final risk review before merge recommendation.
+- Maximum dependency context necessary using fedora-nexus skills:
+  - `fedora-nexus-guide` for available graph tools/query shape;
+  - `fedora-nexus-exploring` (and/or `fedora-nexus`) to locate existing flow and architecture touchpoints;
+  - `fedora-nexus-impact` to estimate blast radius and dependent files before edits;
+  - `fedora-nexus-refactoring` when task scope includes rename/extract/move/split/restructure;
+  - `fedora-nexus-pr-review` when producing final risk review before merge recommendation.
 - The existing controller, handler, and serializer patterns used by adjacent endpoints (look at `public_api/end_user_api/v2/` or `public_api/admin_api/v2/` as appropriate).
 - The relevant fabricators in `spec/fabricators/` for models involved.
 - Existing routes in `config/routes.rb` for the namespace.

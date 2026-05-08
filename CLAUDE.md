@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-`depgraph` is a dependency graph MCP server for AI agents. It indexes source code (Python, TypeScript, JavaScript, Ruby) using tree-sitter and exposes tools for dependency analysis, hybrid symbol search, and Cypher graph queries. The graph data is stored in a Kuzu embedded graph database.
+`fedora-nexus` is a dependency graph MCP server for AI agents. It indexes source code (Python, TypeScript, JavaScript, Ruby) using tree-sitter and exposes tools for dependency analysis, hybrid symbol search, and Cypher graph queries. The graph data is stored in a Kuzu embedded graph database.
 
 ## Development commands
 
@@ -28,14 +28,14 @@ docker compose up -d mcp-server
 docker compose logs -f mcp-server
 
 # Build Go CLI (from cli/ directory)
-cd cli && go build -o depgraph .
+cd cli && go build -o fedora-nexus .
 ```
 
 ## Architecture
 
 There are two separate CLI implementations that talk to the same server:
 
-- **Python CLI** (`src/depgraph/cli.py`): thin HTTP client using stdlib `urllib`. Auto-detects the server at `localhost:7832`; falls back to local in-process mode if the server is unreachable. This is the packaged `depgraph` entry point.
+- **Python CLI** (`src/fedora_nexus/cli.py`): thin HTTP client using stdlib `urllib`. Auto-detects the server at `localhost:7832`; falls back to local in-process mode if the server is unreachable. This is the packaged `fedora-nexus` entry point.
 - **Go CLI** (`cli/`): Cobra + Bubble Tea TUI alternative. Built separately; connects to the same server. Only HTTP mode — no local fallback.
 
 The Python server stack:
@@ -71,14 +71,14 @@ Symbol nodes have IDs in the format `{rel_path}#{kind}:{qualified_name}` (e.g. `
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `DEPGRAPH_DB_PATH` | `/data/depgraph.db` | Kuzu DB path inside container |
+| `FEDORA_NEXUS_DB_PATH` | `/data/fedora-nexus.db` | Kuzu DB path inside container |
 | `HOST_REPOS_PREFIX` | *(empty)* | Host path prefix stripped when translating paths — must match the volume mount source in `docker-compose.yml` |
 | `CONTAINER_REPOS_PATH` | `/repos` | Container mount point for repos |
-| `DEPGRAPH_HTTP_PORT` | `7832` | HTTP server port |
-| `DEPGRAPH_SERVER_URL` | *(auto)* | Force a specific server URL in CLI |
+| `FEDORA_NEXUS_HTTP_PORT` | `7832` | HTTP server port |
+| `FEDORA_NEXUS_SERVER_URL` | *(auto)* | Force a specific server URL in CLI |
 
 `HOST_REPOS_PREFIX` and `CONTAINER_REPOS_PATH` are critical: the store translates absolute host paths (passed by the user) to container paths before writing to the DB, and back on reads. Misconfiguration causes "repo not found" errors.
 
-## Using depgraph on this repo
+## Using fedora-nexus on this repo
 
 See `skills/CLAUDE.md` for MCP tool usage patterns (blast radius, dependency traversal, Cypher queries) when working on any indexed codebase.

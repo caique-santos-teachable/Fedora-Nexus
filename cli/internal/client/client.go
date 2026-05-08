@@ -1,4 +1,4 @@
-// Package client provides an HTTP client for the depgraph server.
+// Package client provides an HTTP client for the fedora-nexus server.
 package client
 
 import (
@@ -15,14 +15,14 @@ import (
 
 const defaultURL = "http://localhost:7832"
 
-// ServerURL returns the depgraph server URL to use.
-// Priority: flag override > DEPGRAPH_SERVER_URL env > auto-detect localhost:7832.
+// ServerURL returns the fedora-nexus server URL to use.
+// Priority: flag override > FEDORA_NEXUS_SERVER_URL env > auto-detect localhost:7832.
 // Returns empty string if no server is reachable.
 func ServerURL(override string) string {
 	if override != "" {
 		return strings.TrimRight(override, "/")
 	}
-	if from := os.Getenv("DEPGRAPH_SERVER_URL"); from != "" {
+	if from := os.Getenv("FEDORA_NEXUS_SERVER_URL"); from != "" {
 		return strings.TrimRight(from, "/")
 	}
 	// Probe TCP to avoid a full HTTP roundtrip on failure.
@@ -40,10 +40,10 @@ type Result struct {
 	Err  error
 }
 
-// Call invokes a depgraph tool via the server's /call endpoint.
+// Call invokes a fedora-nexus tool via the server's /call endpoint.
 func Call(serverURL, tool string, args map[string]any) Result {
 	if serverURL == "" {
-		return Result{Err: fmt.Errorf("no server reachable — start it with: depgraph server-start")}
+		return Result{Err: fmt.Errorf("no server reachable — start it with: fedora-nexus server-start")}
 	}
 	payload, err := json.Marshal(map[string]any{"tool": tool, "args": args})
 	if err != nil {

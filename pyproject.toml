@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "depgraph"
+name = "fedora-nexus"
 version = "0.1.0"
 description = "Dependency graph engine with MCP interface for AI agents"
 requires-python = ">=3.11"
@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
-depgraph = "depgraph.cli:main"
+fedora-nexus = "fedora_nexus.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov"]
@@ -37,4 +37,4 @@ markers = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/depgraph"]
+packages = ["src/fedora_nexus"]

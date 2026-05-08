@@ -23,12 +23,12 @@ You are the Orchestrator — the single entry point for all development work. Yo
 ### Phase 1 — Understand the Task
 1. Read the user's request carefully.
 2. If a Jira ticket-id is provided, use it as the primary source of scope and acceptance criteria.
-3. Gather maximum dependency context necessary using depgraph skills:
-   - `depgraph-guide` (tool/query reference),
-   - `depgraph-exploring` (where logic currently lives),
-   - `depgraph-impact` (blast radius before edits),
-   - `depgraph-refactoring` when the task includes rename/extract/move/split/restructure,
-   - `depgraph-pr-review` when preparing merge-risk or final review guidance.
+3. Gather maximum dependency context necessary using fedora-nexus skills:
+   - `fedora-nexus-guide` (tool/query reference),
+   - `fedora-nexus-exploring` (where logic currently lives),
+   - `fedora-nexus-impact` (blast radius before edits),
+   - `fedora-nexus-refactoring` when the task includes rename/extract/move/split/restructure,
+   - `fedora-nexus-pr-review` when preparing merge-risk or final review guidance.
 4. Search relevant files to understand context (models, controllers, serializers, tests).
 5. Write a concise implementation brief: what needs to be done, where, and acceptance criteria.
 6. Create a todo list with all phases tracked.

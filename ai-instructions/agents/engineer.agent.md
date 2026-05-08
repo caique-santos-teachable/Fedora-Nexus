@@ -30,12 +30,12 @@ Before doing anything else, identify whether any instruction file applies to thi
 
 If the task matches multiple files, load all of them. These files define mandatory patterns — follow them strictly.
 
-### 0.1 Maximum depgraph context necessary (mandatory)
-Before implementation planning, reference depgraph skills to reduce blind edits:
-- `depgraph-guide` for tool/query usage patterns
-- `depgraph-exploring` (or `depgraph`) to locate current flow and touchpoints
-- `depgraph-impact` to understand blast radius of planned file edits
-- `depgraph-refactoring` when the task requires rename/extract/move/split/restructure
+### 0.1 Maximum fedora-nexus context necessary (mandatory)
+Before implementation planning, reference fedora-nexus skills to reduce blind edits:
+- `fedora-nexus-guide` for tool/query usage patterns
+- `fedora-nexus-exploring` (or `fedora-nexus`) to locate current flow and touchpoints
+- `fedora-nexus-impact` to understand blast radius of planned file edits
+- `fedora-nexus-refactoring` when the task requires rename/extract/move/split/restructure
 
 ### 1. Understand
 - Read the task brief and acceptance criteria from the Orchestrator.

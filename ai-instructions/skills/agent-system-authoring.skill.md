@@ -34,7 +34,7 @@ ai-instructions/
 | Always-on guardrail (cross-language, path-scoped to a file type) | Architecture reference or large domain knowledge |
 | Forces behavior — "always check X when touching Y files" | On-demand — agent invokes when the task is in that domain |
 | Short enough to not pollute context (< 200 lines) | Too large or too specific to be always-on |
-| e.g. `ruby-rails.rule.md`, `development-quality.rule.md` | e.g. `depgraph.skill.md`, `public-api-v2.skill.md` |
+| e.g. `ruby-rails.rule.md`, `development-quality.rule.md` | e.g. `fedora-nexus.skill.md`, `public-api-v2.skill.md` |
 
 ---
 

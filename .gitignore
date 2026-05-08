@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.so
+.venv/
 *.egg
 *.egg-info/
 dist/
@@ -28,16 +29,14 @@ coverage.xml
 .dmypy.json
 
 # Go
-cli/depgraph
-cli/fedora-nexus-core
+cli/fedora-nexus
 
 # Env / secrets
 .env
 !.env.example
 
 # Graph DB data
-.depgraph/
-.fedora-nexus-core/
+.fedora-nexus/
 *.kuzu/
 
 # Model cache (fastembed / sentence-transformers)
@@ -52,6 +51,9 @@ fastembed_cache/
 .idea/
 *.swp
 *.swo
+
+# Node (in case present locally)
+node_modules/
 
 # Docker
 .dockerignore

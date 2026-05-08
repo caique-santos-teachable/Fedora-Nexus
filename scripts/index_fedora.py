@@ -1,4 +1,4 @@
-"""Index the fedora project and save graph to .depgraph/graph.json."""
+"""Index the fedora project and save graph to .fedora-nexus/graph.json."""
 
 import sys
 import logging
@@ -8,11 +8,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 logging.basicConfig(level=logging.WARNING)
 
-from depgraph.graph.engine import DependencyGraph
-from depgraph.indexer.ruby_indexer import RubyIndexer
+from fedora_nexus.graph.engine import DependencyGraph
+from fedora_nexus.indexer.ruby_indexer import RubyIndexer
 
 ROOT = str(Path.home() / "code/v0/fedora")
-GRAPH_PATH = Path(ROOT) / ".depgraph" / "graph.json"
+GRAPH_PATH = Path(ROOT) / ".fedora-nexus" / "graph.json"
 
 print(f"Indexing Ruby files in {ROOT} ...")
 graph = RubyIndexer().index(ROOT)

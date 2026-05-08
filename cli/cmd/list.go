@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"depgraph/internal/client"
-	"depgraph/internal/ui"
+	"fedora-nexus/internal/client"
+	"fedora-nexus/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -51,7 +51,7 @@ func renderListResult(data map[string]any) {
 		fmt.Println(ui.MutedStyle.Render("  No repositories indexed yet."))
 		fmt.Println()
 		fmt.Println(ui.MutedStyle.Render("  Get started:"))
-		fmt.Println(ui.ValueStyle.Render("    depgraph index /path/to/your/repo"))
+		fmt.Println(ui.ValueStyle.Render("    fedora-nexus index /path/to/your/repo"))
 		fmt.Println()
 		return
 	}

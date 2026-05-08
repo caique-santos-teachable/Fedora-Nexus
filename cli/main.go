@@ -1,6 +1,6 @@
 package main
 
-import "depgraph/cmd"
+import "fedora-nexus/cmd"
 
 func main() {
 	cmd.Execute()

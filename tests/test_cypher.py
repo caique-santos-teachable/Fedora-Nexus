@@ -1,8 +1,8 @@
 """Tests for Cypher-subset query engine."""
 
 import pytest
-from depgraph.graph.engine import DependencyGraph
-from depgraph.query.cypher import execute
+from fedora_nexus.graph.engine import DependencyGraph
+from fedora_nexus.query.cypher import execute
 
 
 def make_graph() -> DependencyGraph:

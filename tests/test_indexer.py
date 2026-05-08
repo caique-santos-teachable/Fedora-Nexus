@@ -2,8 +2,8 @@
 
 import pytest
 from pathlib import Path
-from depgraph.indexer.tree_sitter_indexer import TreeSitterIndexer
-from depgraph.indexer.base import detect_language
+from fedora_nexus.indexer.tree_sitter_indexer import TreeSitterIndexer
+from fedora_nexus.indexer.base import detect_language
 
 # Convenience aliases so all existing test bodies work without change
 PythonIndexer = lambda: TreeSitterIndexer(languages=["python"])

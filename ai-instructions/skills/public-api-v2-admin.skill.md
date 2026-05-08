@@ -141,13 +141,13 @@ Minimum rswag coverage:
 - not found for member routes
 - validation/invalid request path when filters/pagination have validation
 
-## 12) depgraph CLI protocol (safe changes)
+## 12) fedora-nexus CLI protocol (safe changes)
 
 Before substantial edits:
 
-1. `depgraph blast-radius $REPO_PATH <changed_files...> --json`
-2. `depgraph deps $REPO_PATH <file> --depth 2 --json`
-3. `depgraph dependents $REPO_PATH <file> --json`
+1. `fedora-nexus blast-radius $REPO_PATH <changed_files...> --json`
+2. `fedora-nexus deps $REPO_PATH <file> --depth 2 --json`
+3. `fedora-nexus dependents $REPO_PATH <file> --json`
 
 ## 13) Implementation template (copy and adapt)
 

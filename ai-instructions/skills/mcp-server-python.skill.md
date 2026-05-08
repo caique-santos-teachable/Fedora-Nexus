@@ -83,10 +83,10 @@ if __name__ == "__main__":
 | `get_graph` | Export full adjacency JSON |
 
 ## Cache pattern
-Persist graph to `.depgraph/graph.json` (or equivalent). Use `_load_or_index`:
+Persist graph to `.fedora-nexus/graph.json` (or equivalent). Use `_load_or_index`:
 ```python
 def _load_or_index(root_path: str) -> Graph:
-    path = Path(root_path) / ".depgraph/graph.json"
+    path = Path(root_path) / ".fedora-nexus/graph.json"
     if path.exists():
         return Graph.load(path)
     return _run_index(root_path)
