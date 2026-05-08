@@ -1,0 +1,101 @@
+---
+mode: 'agent'
+description: 'Use when the user wants to understand how code works, explore architecture, find where logic lives, or trace execution. Examples: "How does X work?", "Where is the authentication logic?", "What calls this function?"'
+---
+
+# Exploring Codebases with depgraph
+
+## When to use
+
+- "How does authentication work?"
+- "What's the project structure?"
+- "Where is the database logic?"
+- "What calls this function?"
+- Understanding unfamiliar code
+
+## Workflow
+
+```
+1. list_repos()                                      → Check what is indexed; note last-indexed time
+2. index_repo({ root_path, with_symbols: true })     → Index if missing or stale
+3. search({ root_path, query: "<concept>" })         → Find relevant symbols by name/content
+4. query_graph({ root_path, cypher: "MATCH (f:Function {name: '<name>'})..." })  → Deep dive on a symbol
+5. get_dependencies({ root_path, file_path, depth: 2 })  → See what a key file imports
+```
+
+## Checklist
+
+```
+- [ ] list_repos — verify repo is indexed and not stale
+- [ ] search for the concept, function name, or keyword you're exploring
+- [ ] Review returned symbols (name, file_path, start_line, content)
+- [ ] query_graph to find callers, callees, class members
+- [ ] get_dependencies / get_dependents for file-level flow
+- [ ] Read the actual source files for implementation details
+```
+
+## Tools in practice
+
+**search** — find symbols by name or content:
+```
+search({ root_path: "/repos/myapp", query: "payment processing" })
+→ Function: processPayment (src/payments/processor.py:14)
+→ Class: PaymentService (src/payments/service.py:5)
+→ Method: chargeCard (src/payments/service.py:42)
+```
+
+**query_graph** — find callers of a function:
+```cypher
+MATCH (caller)-[r:CodeRelation {type: 'CALLS'}]->(f:Function {name: "processPayment"})
+RETURN caller.name, caller.file_path, caller.start_line
+```
+
+**query_graph** — find all methods of a class:
+```cypher
+MATCH (c:Class {name: "PaymentService"})-[r:CodeRelation {type: 'CONTAINS'}]->(m:Method)
+RETURN m.name, m.start_line, m.end_line
+```
+
+**get_dependencies** — see what a file imports:
+```
+get_dependencies({ root_path: "/repos/myapp", file_path: "src/payments/processor.py", depth: 2 })
+```
+
+## Example: "How does payment processing work?"
+
+```
+1. list_repos() → /repos/myapp indexed 2 hours ago, 1,240 nodes
+2. search({ query: "payment processing" })
+   → processPayment (src/payments/processor.py:14)
+   → PaymentService class (src/payments/service.py:5)
+3. query_graph — find callers of processPayment
+   → checkoutHandler, webhookHandler, retryJob
+4. get_dependencies({ file_path: "src/payments/processor.py", depth: 2 })
+   → imports: stripe_client.py, validators.py, models/transaction.py
+5. Read src/payments/processor.py for full implementation
+```
+
+---
+
+## CLI fallback (when MCP is unavailable)
+
+If the depgraph MCP server is not running or not configured, use the `depgraph` CLI directly — same operations, JSON output.
+
+```bash
+# 1. Check what is indexed
+depgraph list
+
+# 2. Index if missing (always indexes with symbols)
+depgraph index /path/to/repo
+
+# 3. Search for a concept
+depgraph search /path/to/repo "payment processing" --limit 20
+
+# 4. Cypher deep dive — callers of a function
+depgraph query /path/to/repo "MATCH (caller)-[r:CodeRelation {type: 'CALLS'}]->(f:Function {name: 'processPayment'}) RETURN caller.name, caller.file_path"
+
+# 5. File-level import chain
+depgraph deps /path/to/repo src/payments/processor.py --depth 2
+```
+
+All commands exit 0 on success, 1 on error. Output is always JSON (add `--json` to suppress TUI).
