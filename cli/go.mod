@@ -1,4 +1,4 @@
-module depgraph
+module fedora-nexus
 
 go 1.22
 

@@ -29,13 +29,13 @@ Before doing anything else, identify whether any instruction file applies to thi
 
 If the task matches multiple files, load all of them. These files define the conventions to validate against.
 
-### 0.1 Maximum depgraph context necessary (mandatory)
+### 0.1 Maximum fedora-nexus context necessary (mandatory)
 Before validating risk/regression, reference:
-- `depgraph-guide` for graph-tool query patterns
-- `depgraph-exploring` (or `depgraph`) to confirm call/dependency paths
-- `depgraph-impact` to validate affected surface and regression scope
-- `depgraph-pr-review` for final change-risk assessment prior to merge guidance
-- `depgraph-refactoring` when validating structural changes (rename/extract/move/split)
+- `fedora-nexus-guide` for graph-tool query patterns
+- `fedora-nexus-exploring` (or `fedora-nexus`) to confirm call/dependency paths
+- `fedora-nexus-impact` to validate affected surface and regression scope
+- `fedora-nexus-pr-review` for final change-risk assessment prior to merge guidance
+- `fedora-nexus-refactoring` when validating structural changes (rename/extract/move/split)
 
 ### 1. Read Context
 - Read the task brief and acceptance criteria.

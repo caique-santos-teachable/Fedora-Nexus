@@ -38,7 +38,7 @@ Only conclude work after all items below are complete:
 
 Always combine:
 
-- Depgraph exploration (through mcp or cli if mcp not available) for dependency/flow discovery.
+- Fedora Nexus Core exploration (through mcp or cli if mcp not available) for dependency/flow discovery.
 - Traditional search (`rg`, direct file reads) for exact behavior and edge cases.
 
 If api/service contract is provided, minimum evidence to collect:

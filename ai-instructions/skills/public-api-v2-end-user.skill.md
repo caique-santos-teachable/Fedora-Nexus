@@ -212,13 +212,13 @@ When adding/changing endpoint behavior:
 
 For request-level contracts, ensure host and oauth/kong stubbing pattern matches current v2 tests.
 
-## 13) depgraph CLI protocol (for safe changes)
+## 13) fedora-nexus CLI protocol (for safe changes)
 
 Before changing files, run:
 
-1. `depgraph blast-radius $REPO_PATH <changed_files...> --json`
-2. `depgraph deps $REPO_PATH <file> --depth 2 --json`
-3. `depgraph dependents $REPO_PATH <file> --json`
+1. `fedora-nexus blast-radius $REPO_PATH <changed_files...> --json`
+2. `fedora-nexus deps $REPO_PATH <file> --depth 2 --json`
+3. `fedora-nexus dependents $REPO_PATH <file> --json`
 
 Use this to:
 

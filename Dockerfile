@@ -34,4 +34,4 @@ VOLUME ["/data"]
 EXPOSE 7832
 
 # The MCP server speaks stdio — no port exposed
-CMD ["python", "-u", "-m", "fedora-nexus-core.mcp.server"]
+CMD ["python", "-u", "-m", "fedora_nexus.mcp.server"]

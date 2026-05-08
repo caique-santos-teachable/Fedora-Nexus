@@ -1,8 +1,8 @@
 """Tests for blast_radius BFS calculator."""
 
 import pytest
-from depgraph.graph.engine import DependencyGraph
-from depgraph.graph.blast_radius import blast_radius
+from fedora_nexus.graph.engine import DependencyGraph
+from fedora_nexus.graph.blast_radius import blast_radius
 
 
 def make_graph() -> DependencyGraph:

@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from depgraph.graph.engine import DependencyGraph
+from fedora_nexus.graph.engine import DependencyGraph
 
 
 def make_simple_graph() -> DependencyGraph:
@@ -96,7 +96,7 @@ def test_subgraph_all_valid_no_missing_field():
 
 def test_save_creates_parent_dirs(tmp_path):
     g = make_simple_graph()
-    filepath = tmp_path / ".depgraph" / "graph.json"
+    filepath = tmp_path / ".fedora-nexus" / "graph.json"
     g.save(filepath)
 
 

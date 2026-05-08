@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from depgraph.graph.engine import DependencyGraph
-from depgraph.store.kuzu_store import KuzuGraphStore
+from fedora_nexus.graph.engine import DependencyGraph
+from fedora_nexus.store.kuzu_store import KuzuGraphStore
 
 
 @pytest.fixture()
@@ -141,7 +141,7 @@ def test_checkpoint_called_after_detach_delete(tmp_path, monkeypatch):
 
 def test_rrf_fuse_combines_both_lists():
     """Items in BOTH lists must score higher than items in only ONE list."""
-    from depgraph.store.embedding_store import rrf_fuse
+    from fedora_nexus.store.embedding_store import rrf_fuse
     # "a" and "b" appear in both lists → dual boost
     # "c" only in BM25, "d" only in semantic → single boost
     bm25 = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
@@ -161,7 +161,7 @@ def test_rrf_fuse_combines_both_lists():
 
 def test_rrf_fuse_empty_semantic_returns_bm25_order():
     """When semantic_results is empty, RRF output must preserve BM25 ranking."""
-    from depgraph.store.embedding_store import rrf_fuse
+    from fedora_nexus.store.embedding_store import rrf_fuse
     bm25 = [{"id": "x"}, {"id": "y"}, {"id": "z"}]
     fused = rrf_fuse(bm25, [], k=60)
     ids = [f[0] for f in fused]
@@ -170,7 +170,7 @@ def test_rrf_fuse_empty_semantic_returns_bm25_order():
 
 def test_rrf_fuse_empty_bm25_returns_semantic_order():
     """When bm25_results is empty, RRF output must reflect semantic ranking."""
-    from depgraph.store.embedding_store import rrf_fuse
+    from fedora_nexus.store.embedding_store import rrf_fuse
     semantic = [("p", 0.9), ("q", 0.8), ("r", 0.7)]
     fused = rrf_fuse([], semantic, k=60)
     ids = [f[0] for f in fused]
@@ -179,17 +179,17 @@ def test_rrf_fuse_empty_bm25_returns_semantic_order():
 
 def test_index_path_is_deterministic():
     """Same (db_path, root_path) must always produce the same index path."""
-    from depgraph.store.embedding_store import _index_path
-    p1 = _index_path("/data/depgraph.db", "/repos/myapp")
-    p2 = _index_path("/data/depgraph.db", "/repos/myapp")
+    from fedora_nexus.store.embedding_store import _index_path
+    p1 = _index_path("/data/fedora-nexus.db", "/repos/myapp")
+    p2 = _index_path("/data/fedora-nexus.db", "/repos/myapp")
     assert p1 == p2
 
 
 def test_index_path_differs_for_different_repos():
     """Different root_paths must produce different index paths."""
-    from depgraph.store.embedding_store import _index_path
-    p1 = _index_path("/data/depgraph.db", "/repos/app1")
-    p2 = _index_path("/data/depgraph.db", "/repos/app2")
+    from fedora_nexus.store.embedding_store import _index_path
+    p1 = _index_path("/data/fedora-nexus.db", "/repos/app1")
+    p2 = _index_path("/data/fedora-nexus.db", "/repos/app2")
     assert p1 != p2
 
 
@@ -205,7 +205,7 @@ def test_search_falls_back_to_bm25_when_no_embedding_index(store, tmp_path):
     store.save_graph(root, g)
 
     # Ensure no embedding index exists
-    from depgraph.store import embedding_store as emb
+    from fedora_nexus.store import embedding_store as emb
     emb.delete_index(store._db_path, root)
     store._embedding_cache.pop(root, None)
 
@@ -217,15 +217,15 @@ def test_search_falls_back_to_bm25_when_no_embedding_index(store, tmp_path):
 
 def test_load_index_returns_none_when_not_built(tmp_path):
     """load_index must return None when no .npz exists."""
-    from depgraph.store.embedding_store import load_index
-    result = load_index(str(tmp_path / "depgraph.db"), "/repos/nonexistent")
+    from fedora_nexus.store.embedding_store import load_index
+    result = load_index(str(tmp_path / "fedora-nexus.db"), "/repos/nonexistent")
     assert result is None
 
 
 def test_delete_index_is_noop_when_missing(tmp_path):
     """delete_index must not raise when index file does not exist."""
-    from depgraph.store.embedding_store import delete_index
-    delete_index(str(tmp_path / "depgraph.db"), "/repos/nonexistent")  # must not raise
+    from fedora_nexus.store.embedding_store import delete_index
+    delete_index(str(tmp_path / "fedora-nexus.db"), "/repos/nonexistent")  # must not raise
 
 
 def test_non_lock_runtime_error_re_raised(tmp_path, monkeypatch):
@@ -269,7 +269,7 @@ def test_stale_lock_retry_also_fails(tmp_path, monkeypatch):
 def test_semantic_search_returns_empty_for_zero_norm_query():
     """semantic_search must return [] when query vector norm is zero."""
     import numpy as np
-    from depgraph.store.embedding_store import semantic_search
+    from fedora_nexus.store.embedding_store import semantic_search
     from unittest.mock import patch, MagicMock
 
     ids = ["a", "b"]
@@ -283,7 +283,7 @@ def test_semantic_search_returns_empty_for_zero_norm_query():
     mock_fastembed.TextEmbedding = MagicMock()
 
     with patch.dict(__import__("sys").modules, {"fastembed": mock_fastembed}), \
-         patch("depgraph.store.embedding_store._get_model", return_value=mock_model):
+         patch("fedora_nexus.store.embedding_store._get_model", return_value=mock_model):
         result = semantic_search(ids, vectors, "anything", k=2)
 
     assert result == []
@@ -292,7 +292,7 @@ def test_semantic_search_returns_empty_for_zero_norm_query():
 def test_semantic_search_ranks_by_cosine_similarity():
     """semantic_search must return ids sorted by cosine similarity descending."""
     import numpy as np
-    from depgraph.store.embedding_store import semantic_search
+    from fedora_nexus.store.embedding_store import semantic_search
     from unittest.mock import patch, MagicMock
 
     # id "b" is aligned with query, "a" is orthogonal
@@ -307,7 +307,7 @@ def test_semantic_search_ranks_by_cosine_similarity():
     mock_fastembed.TextEmbedding = MagicMock()
 
     with patch.dict(__import__("sys").modules, {"fastembed": mock_fastembed}), \
-         patch("depgraph.store.embedding_store._get_model", return_value=mock_model):
+         patch("fedora_nexus.store.embedding_store._get_model", return_value=mock_model):
         result = semantic_search(ids, vectors, "query", k=2)
 
     assert result[0][0] == "b", f"Expected 'b' as top result, got {result}"
@@ -320,8 +320,8 @@ def test_semantic_search_ranks_by_cosine_similarity():
 
 def test_build_index_returns_false_for_empty_symbols(tmp_path):
     """build_index must return False when no symbols are provided."""
-    from depgraph.store import embedding_store as emb
-    result = emb.build_index(str(tmp_path / "depgraph.db"), "/repos/test", [])
+    from fedora_nexus.store import embedding_store as emb
+    result = emb.build_index(str(tmp_path / "fedora-nexus.db"), "/repos/test", [])
     assert result is False
 
 
@@ -329,7 +329,7 @@ def test_build_index_saves_npz_and_returns_true(tmp_path):
     """build_index must save a .npz file and return True when model is available."""
     import numpy as np
     from unittest.mock import patch, MagicMock
-    from depgraph.store import embedding_store as emb
+    from fedora_nexus.store import embedding_store as emb
 
     symbols = [
         {"id": "repo::src/a.py#function:foo", "name": "foo", "content": "def foo(): pass"},
@@ -342,9 +342,9 @@ def test_build_index_saves_npz_and_returns_true(tmp_path):
     mock_fastembed = MagicMock()
     mock_fastembed.TextEmbedding = MagicMock()
 
-    db_path = str(tmp_path / "depgraph.db")
+    db_path = str(tmp_path / "fedora-nexus.db")
     with patch.dict(__import__("sys").modules, {"fastembed": mock_fastembed}), \
-         patch("depgraph.store.embedding_store._get_model", return_value=mock_model):
+         patch("fedora_nexus.store.embedding_store._get_model", return_value=mock_model):
         result = emb.build_index(db_path, "/repos/test", symbols)
 
     assert result is True
@@ -393,8 +393,8 @@ def test_edge_rel_preservation(store):
 
 
 def test_rich_schema_saves_function_with_content(tmp_path):
-    from depgraph.graph.engine import DependencyGraph
-    from depgraph.store.kuzu_store import KuzuGraphStore
+    from fedora_nexus.graph.engine import DependencyGraph
+    from fedora_nexus.store.kuzu_store import KuzuGraphStore
     g = DependencyGraph()
     g.add_node("src/app.py", language="python", kind="file", name="app.py", content="# app")
     g.add_node("src/app.py#function:greet", language="python", kind="function",
@@ -414,7 +414,7 @@ def test_rich_schema_saves_function_with_content(tmp_path):
 
 
 def test_schema_version_error_on_old_schema(tmp_path):
-    from depgraph.store.kuzu_store import KuzuGraphStore, SchemaVersionError
+    from fedora_nexus.store.kuzu_store import KuzuGraphStore, SchemaVersionError
     from unittest.mock import MagicMock, patch
 
     store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
@@ -436,8 +436,8 @@ def test_schema_version_error_on_old_schema(tmp_path):
 
 @pytest.mark.integration
 def test_search_returns_function_by_name(tmp_path):
-    from depgraph.graph.engine import DependencyGraph
-    from depgraph.store.kuzu_store import KuzuGraphStore
+    from fedora_nexus.graph.engine import DependencyGraph
+    from fedora_nexus.store.kuzu_store import KuzuGraphStore
     g = DependencyGraph()
     g.add_node("src/auth.py", language="python", kind="file", name="auth.py", content="# auth module")
     g.add_node("src/auth.py#function:authenticate", language="python", kind="function",

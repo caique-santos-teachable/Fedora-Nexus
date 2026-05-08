@@ -1,4 +1,4 @@
-// Package cmd implements the depgraph CLI using Cobra + Bubble Tea.
+// Package cmd implements the fedora-nexus CLI using Cobra + Bubble Tea.
 package cmd
 
 import (
@@ -15,14 +15,14 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "depgraph",
+	Use:   "fedora-nexus",
 	Short: "Code dependency graph — index, query, and explore your codebase",
-	Long: `depgraph analyses code dependencies using a graph database.
+	Long: `fedora-nexus analyses code dependencies using a graph database.
 
-The CLI connects to a running depgraph server (Docker container).
-Start the server with:  depgraph server-start
+The CLI connects to a running fedora-nexus server (Docker container).
+Start the server with:  fedora-nexus server-start
 
-Set a custom server URL via --server or DEPGRAPH_SERVER_URL env var.`,
+Set a custom server URL via --server or FEDORA_NEXUS_SERVER_URL env var.`,
 }
 
 // Execute runs the root command. Called by main.

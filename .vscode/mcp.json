@@ -1,22 +1,20 @@
 {
-  "servers": {
+  "mcpServers": {
     "atlassian": {
-      "type": "http",
       "url": "https://mcp.atlassian.com/v1/mcp"
     },
-    "depgraph": {
-      "type": "http",
+    "fedora-nexus": {
       "url": "http://localhost:7832/sse"
     },
-    "depgraph-stdio": {
+    "fedora-nexus-stdio": {
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "-v", "${env:HOME}/.depgraph:/data",
+        "-v", "${env:HOME}/.fedora-nexus:/data",
         "-v", "${env:HOME}/code:/repos:ro",
         "-e", "HOST_REPOS_PREFIX=${env:HOME}/code",
         "-e", "CONTAINER_REPOS_PATH=/repos",
-        "depgraph-mcp:latest"
+        "fedora-nexus-mcp:latest"
       ]
     }
   }

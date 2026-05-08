@@ -1,4 +1,4 @@
-# depgraph
+# fedora-nexus
 
 Dependency graph MCP server for AI agents. Indexes source code (Python, TypeScript, JavaScript, Ruby) and exposes tools for dependency analysis, hybrid symbol search, and Cypher graph queries.
 
@@ -14,12 +14,12 @@ bash setup.sh
 docker compose up -d mcp-server
 
 # 3. Index a repo
-depgraph index /path/to/your/repo
+fedora-nexus index /path/to/your/repo
 ```
 
 The server listens at `http://localhost:7832/sse`. **The CLI requires the server to be running** — there is no local fallback mode.
 
-All data (graph DB + embeddings) lives inside the `depgraph-data` Docker managed volume — nothing is written to the host filesystem.
+All data (graph DB + embeddings) lives inside the `fedora-nexus-data` Docker managed volume — nothing is written to the host filesystem.
 
 ### Upgrading
 
@@ -27,7 +27,7 @@ To reset the database (e.g. after a breaking schema change):
 
 ```bash
 docker compose down
-docker volume rm depgraph_depgraph-data
+docker volume rm fedora-nexus_fedora-nexus-data
 docker compose up -d mcp-server
 ```
 
@@ -41,16 +41,15 @@ Add to `.vscode/mcp.json` (or the global `~/Library/Application Support/Code/Use
 
 ```json
 {
-  "servers": {
-    "depgraph": {
-      "type": "http",
+  "mcpServers": {
+    "fedora-nexus": {
       "url": "http://localhost:7832/sse"
     }
   }
 }
 ```
 
-Reload the window and the `depgraph` server will appear in the Copilot MCP panel.
+Reload the window and the `fedora-nexus` server will appear in the Copilot MCP panel.
 
 ### Claude Desktop
 
@@ -59,7 +58,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "depgraph": {
+    "fedora-nexus": {
       "url": "http://localhost:7832/sse",
       "type": "sse"
     }
@@ -74,7 +73,7 @@ Add to `.cursor/mcp.json` at the project root or `~/.cursor/mcp.json` globally:
 ```json
 {
   "mcpServers": {
-    "depgraph": {
+    "fedora-nexus": {
       "url": "http://localhost:7832/sse"
     }
   }
@@ -85,21 +84,21 @@ Add to `.cursor/mcp.json` at the project root or `~/.cursor/mcp.json` globally:
 
 ## CLI reference
 
-The `depgraph` binary is the primary interface. All commands communicate with the running server.
+The `fedora-nexus` binary is the primary interface. All commands communicate with the running server.
 
 | Command | Flags | Description |
 |---------|-------|-------------|
-| `depgraph index <root-path>` | `--force` | Index a repo (symbols always included) |
-| `depgraph search <root-path> <query>` | `--limit N` | Hybrid search across indexed symbols |
-| `depgraph deps <root-path> <file>` | `--depth N` | Files that a given file imports |
-| `depgraph dependents <root-path> <file>` | `--depth N` | Files that import a given file |
-| `depgraph blast-radius <root-path> <file> [file...]` | `--max-depth N` | Everything affected by a change |
-| `depgraph query <root-path> <cypher>` | — | Execute a read-only Cypher query |
-| `depgraph graph <root-path>` | — | Print the full adjacency graph as JSON |
-| `depgraph list` | — | List all indexed repos with stats |
-| `depgraph delete <root-path>` | — | Remove a repo from the graph DB |
-| `depgraph server-start` | — | Start the server via Docker |
-| `depgraph server-stop` | — | Stop the server |
+| `fedora-nexus index <root-path>` | `--force` | Index a repo (symbols always included) |
+| `fedora-nexus search <root-path> <query>` | `--limit N` | Hybrid search across indexed symbols |
+| `fedora-nexus deps <root-path> <file>` | `--depth N` | Files that a given file imports |
+| `fedora-nexus dependents <root-path> <file>` | `--depth N` | Files that import a given file |
+| `fedora-nexus blast-radius <root-path> <file> [file...]` | `--max-depth N` | Everything affected by a change |
+| `fedora-nexus query <root-path> <cypher>` | — | Execute a read-only Cypher query |
+| `fedora-nexus graph <root-path>` | — | Print the full adjacency graph as JSON |
+| `fedora-nexus list` | — | List all indexed repos with stats |
+| `fedora-nexus delete <root-path>` | — | Remove a repo from the graph DB |
+| `fedora-nexus server-start` | — | Start the server via Docker |
+| `fedora-nexus server-stop` | — | Stop the server |
 
 ---
 
@@ -185,7 +184,7 @@ The `fastembed` dependency (including the BAAI/bge-small-en-v1.5 embedding model
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEPGRAPH_DB_PATH` | `/data/depgraph.db` | Path to the Kuzu DB inside the container |
+| `FEDORA_NEXUS_DB_PATH` | `/data/fedora-nexus.db` | Path to the Kuzu DB inside the container |
 | `HOST_REPOS_PREFIX` | *(empty)* | Host path prefix to strip when translating paths |
 | `CONTAINER_REPOS_PATH` | `/repos` | Container mount point for repos |
-| `DEPGRAPH_HTTP_PORT` | `7832` | HTTP server port |
+| `FEDORA_NEXUS_HTTP_PORT` | `7832` | HTTP server port |

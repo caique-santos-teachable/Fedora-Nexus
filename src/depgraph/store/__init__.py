@@ -1,1 +1,0 @@
-"""Kuzu-backed graph store."""

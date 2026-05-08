@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strconv"
 
-	"depgraph/internal/client"
-	"depgraph/internal/ui"
+	"fedora-nexus/internal/client"
+	"fedora-nexus/internal/ui"
 
 	"github.com/spf13/cobra"
 )

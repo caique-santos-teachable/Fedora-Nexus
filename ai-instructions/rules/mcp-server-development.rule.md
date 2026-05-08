@@ -1,6 +1,6 @@
 ---
-description: MCP server development patterns — error handling, API contract design, and testing discipline for Python MCP servers (e.g. depgraph).
-applyTo: "**/depgraph/**/*.py,**/mcp/**/*.py"
+description: MCP server development patterns — error handling, API contract design, and testing discipline for Python MCP servers (e.g. fedora-nexus).
+applyTo: "**/fedora_nexus/**/*.py,**/mcp/**/*.py"
 ---
 
 # MCP Server Development — Quality Guardrails
@@ -381,13 +381,13 @@ Adicionar novos itens neste arquivo sempre que um bug de contrato MCP, erro de s
 - **Exemplo**:
   ```bash
   # ❌ -t allocates TTY — corrupts MCP stdio framing
-  docker run --rm -it depgraph-mcp
+  docker run --rm -it fedora-nexus-mcp
 
   # ✅ -i only — clean binary stdio
   docker run --rm -i \
     -e DATABASE_URL="$DATABASE_URL" \
     -v /repos:/repos:ro \
-    depgraph-mcp
+    fedora-nexus-mcp
   ```
 - **Regra**: any generated Cursor/Claude Desktop `mcp_config.json` or `mcpServers` block must pass `["docker", "run", "--rm", "-i", ...]` — never include `"-t"` in that array.
 
@@ -425,10 +425,10 @@ Adicionar novos itens neste arquivo sempre que um bug de contrato MCP, erro de s
   # ✅ portable — host path varies, /repos is constant
   docker run --rm -i \
     -v "$HOME/projects:/repos:ro" \
-    depgraph-mcp
+    fedora-nexus-mcp
 
   # Cursor mcpServers entry:
-  # "args": ["run", "--rm", "-i", "-v", "/Users/alice/projects:/repos:ro", "depgraph-mcp"]
+  # "args": ["run", "--rm", "-i", "-v", "/Users/alice/projects:/repos:ro", "fedora-nexus-mcp"]
   ```
 - **Regra**: all tool calls that accept a `repo_path` must expect paths rooted at `/repos/...` when running in the container. Document this mapping in the tool's description string.
 
