@@ -1,0 +1,71 @@
+---
+name: fedora-nexus
+description: "Use when: querying, indexing, or analyzing code dependencies with the fedora-nexus MCP server. Quick reference for all tools and Cypher patterns."
+---
+# fedora-nexus MCP — Copilot Instructions
+
+fedora-nexus is a code dependency graph MCP server. Use its tools to understand code before making changes.
+
+## When to use fedora-nexus
+
+- Before editing a file → check blast radius
+- Understanding how code works → explore with search + query_graph
+- Debugging a regression → trace callers and dependencies
+- Reviewing a PR → map changed files to affected code
+
+## Quick reference
+
+```
+list_repos()                                               → See indexed repos
+index_repo({ root_path, with_symbols: true })              → Index a repo
+search({ root_path, query: "keyword" })                    → Find symbols by name/content
+blast_radius({ root_path, changed_files: ["..."] })        → Impact of a change
+get_dependencies({ root_path, file_path, depth: 2 })       → What a file imports
+get_dependents({ root_path, file_path })                   → What imports a file
+query_graph({ root_path, cypher: "MATCH ..." })            → Native Cypher queries
+```
+
+## Graph schema (for query_graph)
+
+Node tables: `File`, `Function`, `Class`, `Method`
+Relationships: `CodeRelation` with `type` — values: `CONTAINS`, `CALLS`, `DEPENDS_ON`
+
+```cypher
+-- Callers of a function
+MATCH (caller)-[r:CodeRelation {type: 'CALLS'}]->(f:Function {name: "my_func"})
+RETURN caller.name, caller.file_path
+
+-- Methods of a class
+MATCH (c:Class {name: "MyClass"})-[r:CodeRelation {type: 'CONTAINS'}]->(m:Method)
+RETURN m.name, m.start_line
+```
+
+## Skill prompts
+
+For specific workflows, use these prompts (available via Copilot prompt picker):
+
+| Prompt | Use for |
+|--------|---------|
+| `fedora-nexus-guide` | Full tools + schema reference |
+| `fedora-nexus-exploring` | Understanding how code works |
+| `fedora-nexus-impact` | Blast radius before changing code |
+| `fedora-nexus-debugging` | Tracing bugs and errors |
+| `fedora-nexus-refactoring` | Safe rename / extract / move |
+| `fedora-nexus-pr-review` | Reviewing PRs for risk |
+---
+
+## CLI alternative (no MCP required)
+
+If MCP is unavailable, use the `fedora-nexus` CLI — same tools, JSON output:
+
+```bash
+fedora-nexus index /path/to/repo
+fedora-nexus blast-radius /path/to/repo src/auth.py src/user.py
+fedora-nexus deps /path/to/repo src/auth.py --depth 2
+fedora-nexus dependents /path/to/repo src/auth.py
+fedora-nexus search /path/to/repo "UserService"
+fedora-nexus query /path/to/repo "MATCH (f:File) WHERE f.path CONTAINS 'auth' RETURN f"
+fedora-nexus list
+```
+
+Exit code 0 = success, 1 = error. Output is always JSON.
