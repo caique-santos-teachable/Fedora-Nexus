@@ -6,11 +6,11 @@ services:
       dockerfile: Dockerfile
     environment:
       DEPGRAPH_DB_PATH: /data/depgraph.db
-      HOST_REPOS_PREFIX: /Users/caiquesantos/code
-      CONTAINER_REPOS_PATH: /repos
+      HOST_REPOS_PREFIX: ${HOST_REPOS_PREFIX:?Set HOST_REPOS_PREFIX in .env}
+      CONTAINER_REPOS_PATH: ${CONTAINER_REPOS_PATH:-/repos}
       FASTEMBED_CACHE_PATH: /app/.cache/fastembed
     volumes:
-      - /Users/caiquesantos/code:/repos:ro
+      - ${HOST_REPOS_PREFIX:?Set HOST_REPOS_PREFIX in .env}:${CONTAINER_REPOS_PATH:-/repos}:ro
       - depgraph-data:/data
     # stdin_open + tty: false so it works with stdio MCP transport
     stdin_open: true
@@ -26,12 +26,12 @@ services:
       dockerfile: Dockerfile
     environment:
       DEPGRAPH_DB_PATH: /data/depgraph.db
-      HOST_REPOS_PREFIX: /Users/caiquesantos/code
-      CONTAINER_REPOS_PATH: /repos
+      HOST_REPOS_PREFIX: ${HOST_REPOS_PREFIX:?Set HOST_REPOS_PREFIX in .env}
+      CONTAINER_REPOS_PATH: ${CONTAINER_REPOS_PATH:-/repos}
       DEPGRAPH_HTTP_PORT: "7832"
       FASTEMBED_CACHE_PATH: /app/.cache/fastembed
     volumes:
-      - /Users/caiquesantos/code:/repos:ro
+      - ${HOST_REPOS_PREFIX:?Set HOST_REPOS_PREFIX in .env}:${CONTAINER_REPOS_PATH:-/repos}:ro
       - depgraph-data:/data
     ports:
       - "7832:7832"

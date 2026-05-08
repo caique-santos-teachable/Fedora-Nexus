@@ -20,19 +20,34 @@
 #      based on the AI agent you use (Claude Code, Cursor, Copilot, Windsurf,
 #      or other agents that use the CLI directly)
 #
-# Supported agents:
-#   Claude Code    → ~/.claude/CLAUDE.md + ~/.claude/commands/depgraph-*.md
-#   Cursor         → ~/.cursor/rules/depgraph.mdc (always-apply)
-#                    ~/.cursor/skills/depgraph-*/SKILL.md (Agent Skills)
-#   GitHub Copilot → <VS Code user prompts>/depgraph*.{instructions,prompt}.md
-#   Windsurf       → ~/.codeium/windsurf/memories/depgraph*.md
+# Canonical source for all agent artifacts:
+#   ai-instructions/instructions/  — *.instructions.md (always-on + file-scoped rules)
+#   ai-instructions/agents/        — *.agent.md (custom agents / subagents)
+#   ai-instructions/prompts/       — *.prompt.md (reusable prompt files)
+#   ai-instructions/skills/        — <name>/SKILL.md (agent skills)
+#
+# Supported agents and install destinations (symlinks, not copies):
+#   Claude Code    → ~/.claude/rules/<name>.md          (instructions, .instructions stripped)
+#                    ~/.claude/agents/*.agent.md         (subagents)
+#                    ~/.claude/skills/<name>/SKILL.md    (skills)
+#   Cursor         → ~/.cursor/rules/<name>.md           (instructions, .instructions stripped)
+#                    ~/.cursor/agents/*.agent.md         (subagents)
+#                    ~/.cursor/skills/<name>/SKILL.md    (skills)
+#   GitHub Copilot → <VS Code user prompts>/*.instructions.md  (instructions, no rename)
+#                    <VS Code user prompts>/*.agent.md         (custom agents)
+#                    <VS Code user prompts>/*.prompt.md        (prompt files)
+#                    <VS Code user prompts>/skills/<name>/SKILL.md (skills)
+#   Windsurf       → ~/.codeium/windsurf/memories/<name>.md   (instructions, .instructions stripped)
 #   Other / CLI    → no config file, just installs the CLI
 # =============================================================================
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILLS_DIR="$REPO_DIR/skills"
+AI_DIR="$REPO_DIR/ai-instructions"
+RULES_DIR="$AI_DIR/rules"
+SKILLS_DIR="$AI_DIR/skills"
+AGENTS_DIR="$AI_DIR/agents"
 
 # ── colours ──────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -220,76 +235,105 @@ install_package() {
   fi
 }
 
-# ── Agent configuration functions ────────────────────────────────────────────
+# ── Agent configuration functions ─────────────────────────────────────────────
+# Routing by file extension:
+#   *.rule.md   → Claude: ~/.claude/rules/   | Cursor: ~/.cursor/rules/   | Copilot: *.instructions.md
+#   *.skill.md  → Claude: ~/.claude/skills/  | Cursor: ~/.cursor/skills/  | Copilot: *.prompt.md + skills/<name>/SKILL.md
+#   *.agent.md  → Claude: ~/.claude/agents/  | Cursor: ~/.cursor/agents/  | Copilot: *.agent.md
 configure_claude() {
   step "Configuring Claude Code..."
-  local dest_dir="$HOME/.claude"
-  local cmd_dir="$dest_dir/commands"
-  mkdir -p "$dest_dir" "$cmd_dir"
+  local rules_dir="$HOME/.claude/rules"
+  local agents_dir="$HOME/.claude/agents"
+  local skills_dir="$HOME/.claude/skills"
+  mkdir -p "$rules_dir" "$agents_dir" "$skills_dir"
 
-  # Main instructions file
-  cp "$SKILLS_DIR/CLAUDE.md" "$dest_dir/CLAUDE.md"
-  info "Instructions written to: $dest_dir/CLAUDE.md"
+  # rules/*.rule.md → ~/.claude/rules/<name>.md
+  for src in "$RULES_DIR"/*.rule.md; do
+    [[ -f "$src" ]] || continue
+    local name; name="$(basename "$src" .rule.md)"
+    ln -sf "$src" "$rules_dir/$name.md"
+    info "Rule linked: $rules_dir/$name.md"
+  done
 
-  # Prompt files → slash commands (strip VS Code frontmatter, keep body)
-  # Each file becomes a /depgraph:<name> command in Claude Code
-  local PROMPTS_DIR="$REPO_DIR/.github/prompts"
-  for src in "$PROMPTS_DIR"/depgraph-*.prompt.md; do
-    local base; base="$(basename "$src" .prompt.md)"
-    local dest="$cmd_dir/${base}.md"
-    # Strip YAML frontmatter (---...---) and write the body
-    awk '/^---/{if(NR==1){skip=1;next}else if(skip){skip=0;next}} !skip' "$src" > "$dest"
-    info "Command written to: $dest"
+  # skills/*.skill.md → ~/.claude/skills/<name>/SKILL.md
+  for src in "$SKILLS_DIR"/*.skill.md; do
+    [[ -f "$src" ]] || continue
+    local name; name="$(basename "$src" .skill.md)"
+    mkdir -p "$skills_dir/$name"
+    ln -sf "$src" "$skills_dir/$name/SKILL.md"
+    info "Skill linked: $skills_dir/$name/SKILL.md"
+  done
+
+  # agents/*.agent.md → ~/.claude/agents/*.agent.md
+  for src in "$AGENTS_DIR"/*.agent.md; do
+    [[ -f "$src" ]] || continue
+    ln -sf "$src" "$agents_dir/$(basename "$src")"
+    info "Agent linked: $agents_dir/$(basename "$src")"
   done
 }
 
 configure_cursor() {
   step "Configuring Cursor..."
   local rules_dir="$HOME/.cursor/rules"
+  local agents_dir="$HOME/.cursor/agents"
   local skills_dir="$HOME/.cursor/skills"
-  mkdir -p "$rules_dir" "$skills_dir"
+  mkdir -p "$rules_dir" "$agents_dir" "$skills_dir"
 
-  # Main always-apply rule (alwaysApply: true → stays as a Rule, not a Skill)
-  cp "$SKILLS_DIR/cursor.mdc" "$rules_dir/depgraph.mdc"
-  info "Rule written to: $rules_dir/depgraph.mdc"
+  # rules/*.rule.md → ~/.cursor/rules/<name>.md
+  for src in "$RULES_DIR"/*.rule.md; do
+    [[ -f "$src" ]] || continue
+    local name; name="$(basename "$src" .rule.md)"
+    ln -sf "$src" "$rules_dir/$name.md"
+    info "Rule linked: $rules_dir/$name.md"
+  done
 
-  # Prompt files → Cursor Skills (Agent Skills standard)
-  # Location: ~/.cursor/skills/<name>/SKILL.md
-  # Frontmatter: name (must match folder name) + description
-  # Skills are auto-applied when the agent decides they're relevant, and can
-  # be invoked explicitly via /depgraph-<name> in the Agent chat.
-  local PROMPTS_DIR="$REPO_DIR/.github/prompts"
-  for src in "$PROMPTS_DIR"/depgraph-*.prompt.md; do
-    local skill_name; skill_name="$(basename "$src" .prompt.md)"
-    local skill_dir="$skills_dir/$skill_name"
-    mkdir -p "$skill_dir"
-    # Extract description from VS Code frontmatter
-    local desc
-    desc="$(awk '/^description:/{gsub(/^description: /,""); gsub(/^'"'"'|'"'"'$/,""); print; exit}' "$src")"
-    # Body without VS Code YAML frontmatter
-    local body
-    body="$(awk '/^---/{if(NR==1){skip=1;next}else if(skip){skip=0;next}} !skip' "$src")"
-    # Write SKILL.md with Agent Skills frontmatter (name must match folder)
-    printf -- '---\nname: %s\ndescription: %s\n---\n%s\n' "$skill_name" "$desc" "$body" > "$skill_dir/SKILL.md"
-    info "Skill written to: $skill_dir/SKILL.md"
+  # skills/*.skill.md → ~/.cursor/skills/<name>/SKILL.md
+  for src in "$SKILLS_DIR"/*.skill.md; do
+    [[ -f "$src" ]] || continue
+    local name; name="$(basename "$src" .skill.md)"
+    mkdir -p "$skills_dir/$name"
+    ln -sf "$src" "$skills_dir/$name/SKILL.md"
+    info "Skill linked: $skills_dir/$name/SKILL.md"
+  done
+
+  # agents/*.agent.md → ~/.cursor/agents/*.agent.md
+  for src in "$AGENTS_DIR"/*.agent.md; do
+    [[ -f "$src" ]] || continue
+    ln -sf "$src" "$agents_dir/$(basename "$src")"
+    info "Agent linked: $agents_dir/$(basename "$src")"
   done
 }
 
 configure_copilot() {
   step "Configuring GitHub Copilot..."
   local dest_dir; dest_dir="$(vscode_prompts_dir)"
-  mkdir -p "$dest_dir"
+  local skills_dest="$dest_dir/skills"
+  mkdir -p "$dest_dir" "$skills_dest"
 
-  # Main instructions file
-  cp "$SKILLS_DIR/copilot.instructions.md" "$dest_dir/depgraph.instructions.md"
-  info "Instructions written to: $dest_dir/depgraph.instructions.md"
+  # rules/*.rule.md → <prompts>/<name>.instructions.md  (always-on guardrails)
+  for src in "$RULES_DIR"/*.rule.md; do
+    [[ -f "$src" ]] || continue
+    local name; name="$(basename "$src" .rule.md)"
+    ln -sf "$src" "$dest_dir/$name.instructions.md"
+    info "Rule linked: $dest_dir/$name.instructions.md"
+  done
 
-  # Prompt files → VS Code .prompt.md (copy as-is, format is already correct)
-  local PROMPTS_DIR="$REPO_DIR/.github/prompts"
-  for src in "$PROMPTS_DIR"/depgraph-*.prompt.md; do
-    local base; base="$(basename "$src")"
-    cp "$src" "$dest_dir/$base"
-    info "Prompt written to: $dest_dir/$base"
+  # skills/*.skill.md → <prompts>/<name>.prompt.md + <prompts>/skills/<name>/SKILL.md  (on-demand)
+  for src in "$SKILLS_DIR"/*.skill.md; do
+    [[ -f "$src" ]] || continue
+    local name; name="$(basename "$src" .skill.md)"
+    ln -sf "$src" "$dest_dir/$name.prompt.md"
+    info "Skill linked: $dest_dir/$name.prompt.md"
+    mkdir -p "$skills_dest/$name"
+    ln -sf "$src" "$skills_dest/$name/SKILL.md"
+    info "Skill linked: $skills_dest/$name/SKILL.md"
+  done
+
+  # agents/*.agent.md → <prompts>/*.agent.md
+  for src in "$AGENTS_DIR"/*.agent.md; do
+    [[ -f "$src" ]] || continue
+    ln -sf "$src" "$dest_dir/$(basename "$src")"
+    info "Agent linked: $dest_dir/$(basename "$src")"
   done
 }
 
@@ -298,24 +342,24 @@ configure_windsurf() {
   local dest_dir="$HOME/.codeium/windsurf/memories"
   mkdir -p "$dest_dir"
 
-  # Main instructions file
-  cp "$SKILLS_DIR/cli-agent.md" "$dest_dir/depgraph.md"
-  info "Instructions written to: $dest_dir/depgraph.md"
-
-  # Prompt files → memories (strip VS Code frontmatter, keep body)
-  local PROMPTS_DIR="$REPO_DIR/.github/prompts"
-  for src in "$PROMPTS_DIR"/depgraph-*.prompt.md; do
-    local base; base="$(basename "$src" .prompt.md).md"
-    local dest="$dest_dir/$base"
-    awk '/^---/{if(NR==1){skip=1;next}else if(skip){skip=0;next}} !skip' "$src" > "$dest"
-    info "Memory written to: $dest"
+  # rules/*.rule.md and skills/*.skill.md → ~/.codeium/windsurf/memories/<name>.md
+  for src in "$RULES_DIR"/*.rule.md "$SKILLS_DIR"/*.skill.md; do
+    [[ -f "$src" ]] || continue
+    local name
+    if [[ "$src" == *.skill.md ]]; then
+      name="$(basename "$src" .skill.md)"
+    else
+      name="$(basename "$src" .rule.md)"
+    fi
+    ln -sf "$src" "$dest_dir/$name.md"
+    info "Memory linked: $dest_dir/$name.md"
   done
 }
 
 configure_cli_only() {
   step "CLI-only setup..."
   info "No agent config file needed — the depgraph CLI is your interface."
-  info "Reference instructions: $SKILLS_DIR/cli-agent.md"
+  info "Reference: $SKILLS_DIR/depgraph.skill.md"
   echo ""
   echo "  Quick start:"
   echo "    depgraph index /path/to/your/repo"
@@ -370,7 +414,7 @@ case "$CHOICE" in
     ;;
   *)
     warn "Unknown choice '${CHOICE}'. Package is installed but no agent config was applied."
-    warn "You can re-run setup.sh to configure an agent, or copy skills manually from: $SKILLS_DIR"
+    warn "You can re-run setup.sh to configure an agent, or browse skills manually in: $AI_DIR"
     ;;
 esac
 
@@ -379,6 +423,6 @@ banner "==========================================="
 info "Setup complete!"
 echo ""
 echo "  Run 'depgraph --help' to see all available commands."
-echo "  Reference docs: $SKILLS_DIR/"
+  echo "  Reference docs: $AI_DIR/"
 banner "==========================================="
 echo ""

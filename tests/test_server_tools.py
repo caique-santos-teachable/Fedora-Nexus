@@ -144,31 +144,31 @@ def test_dispatch_logs_result_summary(caplog):
 
 def test_translate_path_no_op_when_prefix_unset(monkeypatch):
     monkeypatch.delenv("HOST_REPOS_PREFIX", raising=False)
-    assert _translate_path("/Users/caiquesantos/code/myrepo") == "/Users/caiquesantos/code/myrepo"
+    assert _translate_path("/Users/testuser/code/myrepo") == "/Users/testuser/code/myrepo"
 
 
 def test_translate_path_replaces_prefix_when_set(monkeypatch):
-    monkeypatch.setenv("HOST_REPOS_PREFIX", "/Users/caiquesantos/code")
+    monkeypatch.setenv("HOST_REPOS_PREFIX", "/Users/testuser/code")
     monkeypatch.setenv("CONTAINER_REPOS_PATH", "/repos")
-    assert _translate_path("/Users/caiquesantos/code/v0/fedora") == "/repos/v0/fedora"
+    assert _translate_path("/Users/testuser/code/v0/fedora") == "/repos/v0/fedora"
 
 
 def test_translate_path_no_op_when_prefix_not_matched(monkeypatch):
-    monkeypatch.setenv("HOST_REPOS_PREFIX", "/Users/caiquesantos/code")
+    monkeypatch.setenv("HOST_REPOS_PREFIX", "/Users/testuser/code")
     monkeypatch.setenv("CONTAINER_REPOS_PATH", "/repos")
     assert _translate_path("/other/path/myrepo") == "/other/path/myrepo"
 
 
 def test_translate_path_uses_default_container_path(monkeypatch):
-    monkeypatch.setenv("HOST_REPOS_PREFIX", "/Users/caiquesantos/code")
+    monkeypatch.setenv("HOST_REPOS_PREFIX", "/Users/testuser/code")
     monkeypatch.delenv("CONTAINER_REPOS_PATH", raising=False)
-    assert _translate_path("/Users/caiquesantos/code/myrepo") == "/repos/myrepo"
+    assert _translate_path("/Users/testuser/code/myrepo") == "/repos/myrepo"
 
 
 def test_translate_path_no_op_when_prefix_empty(monkeypatch):
     monkeypatch.setenv("HOST_REPOS_PREFIX", "")
     monkeypatch.setenv("CONTAINER_REPOS_PATH", "/repos")
-    assert _translate_path("/Users/caiquesantos/code/myrepo") == "/Users/caiquesantos/code/myrepo"
+    assert _translate_path("/Users/testuser/code/myrepo") == "/Users/testuser/code/myrepo"
 
 
 # ------------------------------------------------------------------
