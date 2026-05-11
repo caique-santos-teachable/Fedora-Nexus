@@ -285,17 +285,17 @@ class KuzuGraphStore:
         ]:
             try:
                 self._conn.execute(
-                    f"CALL CREATE_FTS_INDEX('{table}', '{idx}', ['name', 'content'])"
+                    f"CALL CREATE_FTS_INDEX('{table}', '{idx}', ['name', 'file_path', 'content'])"
                 )
             except Exception:
-                # Index already exists — drop and recreate.
+                # Index already exists — drop and recreate (also picks up field changes).
                 try:
                     self._conn.execute(f"CALL DROP_FTS_INDEX('{table}', '{idx}')")
                 except Exception:
                     pass
                 try:
                     self._conn.execute(
-                        f"CALL CREATE_FTS_INDEX('{table}', '{idx}', ['name', 'content'])"
+                        f"CALL CREATE_FTS_INDEX('{table}', '{idx}', ['name', 'file_path', 'content'])"
                     )
                 except Exception as exc:
                     logger.warning("FTS index creation failed for %s: %s", table, exc)
@@ -305,9 +305,16 @@ class KuzuGraphStore:
         for n in data["nodes"]:
             if n.get("kind") in ("function", "class", "method", "class_method"):
                 symbols_for_embed.append({
-                    "id": f"{root_path}::{n['id']}",
+                    "id": n["id"],  # raw node ID — matches BM25 result IDs for RRF fusion
                     "name": n.get("name", ""),
                     "content": n.get("content", ""),
+                })
+            elif n.get("kind") == "file":
+                symbols_for_embed.append({
+                    "id": n["id"],
+                    "name": n.get("name", ""),
+                    "file_path": n.get("file_path", ""),  # path is the meaningful signal for files
+                    "content": "",
                 })
         if symbols_for_embed:
             db_path = self._db_path
@@ -502,21 +509,38 @@ class KuzuGraphStore:
             return res.get_next()[0]
         return None
 
-    def search(self, root_path: str, query: str, limit: int = 20) -> list[dict]:
+    # Maps kind name -> (FTS table, kind label) for search filtering.
+    _FTS_TABLES: list[tuple[str, str]] = [
+        ("Function", "function"),
+        ("Class", "class"),
+        ("Method", "method"),
+        ("File", "file"),
+    ]
+    _KIND_TO_FTS_TABLE: dict[str, tuple[str, str]] = {
+        "function":    ("Function", "function"),
+        "class":       ("Class",    "class"),
+        "method":      ("Method",   "method"),
+        "class_method": ("Method",  "method"),  # Ruby class methods stored in Method table
+        "file":        ("File",     "file"),
+    }
+
+    def search(self, root_path: str, query: str, limit: int = 20, kind: str | None = None) -> list[dict]:
         """Hybrid BM25 + semantic search with RRF fusion.
 
+        kind: optional filter — one of 'function', 'class', 'method', 'class_method', 'file'.
         Falls back to BM25-only if fastembed is not installed or no embedding index exists.
         """
         # --- BM25 via Kuzu FTS ---
         escaped = query.replace("\\", "\\\\").replace("'", "''")
         bm25_results: list[dict] = []
         bm25_fetch = max(limit * 3, 50)  # fetch more for RRF fusion
-        for table, kind in [
-            ("Function", "function"),
-            ("Class", "class"),
-            ("Method", "method"),
-            ("File", "file"),
-        ]:
+        # kind_filter saved before loop variable shadows it
+        kind_filter = kind
+        fts_tables = (
+            [self._KIND_TO_FTS_TABLE[kind_filter]] if kind_filter and kind_filter in self._KIND_TO_FTS_TABLE
+            else self._FTS_TABLES
+        )
+        for table, kind in fts_tables:
             try:
                 cypher = (
                     f"CALL QUERY_FTS_INDEX('{table}', '{table.lower()}_fts', '{escaped}', "
@@ -573,7 +597,7 @@ class KuzuGraphStore:
         semantic_only_ids = [sid for sid, _ in fused[:limit] if sid not in meta]
         if semantic_only_ids:
             for sid in semantic_only_ids:
-                for table, kind in [("Function", "function"), ("Class", "class"), ("Method", "method")]:
+                for table, kind in [("Function", "function"), ("Class", "class"), ("Method", "method"), ("File", "file")]:
                     try:
                         res = self._conn.execute(
                             f"MATCH (n:{table} {{id: $id}}) RETURN n",

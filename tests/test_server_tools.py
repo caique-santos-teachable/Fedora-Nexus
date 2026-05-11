@@ -214,3 +214,121 @@ def test_tool_reset_db_calls_store_reset_and_returns_ok():
     mock_store.reset_db.assert_called_once()
     assert result["status"] == "ok"
     assert "message" in result
+
+
+# ------------------------------------------------------------------
+# search: kind filter
+# ------------------------------------------------------------------
+
+def test_search_tool_kind_filter_forwarded_to_store():
+    """kind argument must be passed through to store.search as keyword arg."""
+    mock_store = MagicMock()
+    mock_store.repo_exists.return_value = True
+    mock_store.search.return_value = []
+    with patch("fedora_nexus.mcp.server._get_store", return_value=mock_store), \
+         patch("fedora_nexus.mcp.server._os.path.isdir", return_value=True):
+        _tool_search("/repo", "auth", 10, kind="function")
+    mock_store.search.assert_called_once_with("/repo", "auth", 10, kind="function")
+
+
+def test_search_tool_kind_none_by_default():
+    """Omitting kind must call store.search with kind=None (no filter)."""
+    mock_store = MagicMock()
+    mock_store.repo_exists.return_value = True
+    mock_store.search.return_value = []
+    with patch("fedora_nexus.mcp.server._get_store", return_value=mock_store), \
+         patch("fedora_nexus.mcp.server._os.path.isdir", return_value=True):
+        _tool_search("/repo", "auth", 10)
+    mock_store.search.assert_called_once_with("/repo", "auth", 10, kind=None)
+
+
+# ------------------------------------------------------------------
+# kuzu_store: embed symbols — no root_path:: prefix, files included
+# ------------------------------------------------------------------
+
+def test_symbols_for_embed_have_no_root_path_prefix():
+    """Symbol IDs in the embed list must match raw node IDs (no root_path:: prefix).
+
+    The prefix was a bug: BM25 results use raw IDs, so a prefixed semantic ID
+    can never match in the RRF fusion meta dict, silently disabling semantic search.
+    """
+    import time
+    from unittest.mock import patch, MagicMock
+    from fedora_nexus.store.kuzu_store import KuzuGraphStore
+    from fedora_nexus.graph.engine import DependencyGraph
+
+    g = DependencyGraph()
+    g.add_node(
+        "src/a.py#function:do_thing",
+        language="python",
+        kind="function",
+        name="do_thing",
+        file_path="src/a.py",
+        content="def do_thing(): pass",
+    )
+
+    captured = []
+
+    def fake_build_index(db_path, root_path, symbols):
+        captured.extend(symbols)
+        return True
+
+    with patch("fedora_nexus.store.kuzu_store._emb.build_index", side_effect=fake_build_index), \
+         patch.object(KuzuGraphStore, "_ensure_schema"), \
+         patch.object(KuzuGraphStore, "_fts_healthy", return_value=True), \
+         patch.object(KuzuGraphStore, "_delete_repo_data"), \
+         patch.object(KuzuGraphStore, "_bulk_copy_nodes"):
+        store = KuzuGraphStore.__new__(KuzuGraphStore)
+        store._db_path = "/fake/db"
+        store._embedding_cache = {}
+        store._conn = MagicMock()
+        store.save_graph("/repo", g)
+
+    # Embedding runs in a background thread — wait for it
+    for _ in range(40):
+        if captured:
+            break
+        time.sleep(0.05)
+
+    assert captured, "build_index was not called"
+    ids = [s["id"] for s in captured]
+    assert all("::" not in sid for sid in ids), f"Prefixed IDs found: {ids}"
+
+
+def test_file_nodes_included_in_embed_symbols():
+    """File-kind nodes must appear in symbols_for_embed so files are semantically searchable."""
+    import time
+    from unittest.mock import patch, MagicMock
+    from fedora_nexus.store.kuzu_store import KuzuGraphStore
+    from fedora_nexus.graph.engine import DependencyGraph
+
+    g = DependencyGraph()
+    g.add_node("src/a.py", language="python", kind="file", name="a.py", file_path="src/a.py")
+
+    captured = []
+
+    def fake_build_index(db_path, root_path, symbols):
+        captured.extend(symbols)
+        return True
+
+    with patch("fedora_nexus.store.kuzu_store._emb.build_index", side_effect=fake_build_index), \
+         patch.object(KuzuGraphStore, "_ensure_schema"), \
+         patch.object(KuzuGraphStore, "_fts_healthy", return_value=True), \
+         patch.object(KuzuGraphStore, "_delete_repo_data"), \
+         patch.object(KuzuGraphStore, "_bulk_copy_nodes"):
+        store = KuzuGraphStore.__new__(KuzuGraphStore)
+        store._db_path = "/fake/db"
+        store._embedding_cache = {}
+        store._conn = MagicMock()
+        store.save_graph("/repo", g)
+
+    for _ in range(40):
+        if captured:
+            break
+        time.sleep(0.05)
+
+    assert captured, "build_index was not called"
+    file_symbols = [s for s in captured if "file_path" in s]
+    assert len(file_symbols) >= 1, "Expected at least one file node in embed symbols"
+    assert file_symbols[0]["id"] == "src/a.py"
+    assert "::" not in file_symbols[0]["id"]

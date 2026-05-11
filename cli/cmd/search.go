@@ -11,10 +11,12 @@ import (
 )
 
 var searchLimitFlag int
+var searchKindFlag string
 
 func init() {
 	rootCmd.AddCommand(searchCmd)
 	searchCmd.Flags().IntVar(&searchLimitFlag, "limit", 20, "maximum number of results")
+	searchCmd.Flags().StringVar(&searchKindFlag, "kind", "", "filter by kind: function, class, method, class_method, file")
 }
 
 var searchCmd = &cobra.Command{
@@ -29,11 +31,15 @@ var searchCmd = &cobra.Command{
 			fmt.Sprintf("Searching for %q", query),
 			jsonFlag,
 			func() ui.ResultMsg {
-				r := client.Call(srv, "search", map[string]any{
+				params := map[string]any{
 					"root_path": rootPath,
 					"query":     query,
 					"limit":     searchLimitFlag,
-				})
+				}
+				if searchKindFlag != "" {
+					params["kind"] = searchKindFlag
+				}
+				r := client.Call(srv, "search", params)
 				return ui.ResultMsg{Data: r.Data, Err: r.Err}
 			},
 		)

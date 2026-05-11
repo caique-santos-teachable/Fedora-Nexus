@@ -10,8 +10,12 @@ from fastembed import TextEmbedding
 
 logger = logging.getLogger(__name__)
 
-# Text to embed for each symbol: "{name} {content[:500]}"
-def _symbol_text(name: str, content: str) -> str:
+# Text to embed for each symbol.
+# For symbols: "{name} {content[:500]}" — captures intent and implementation.
+# For files: "{name} {file_path}" — path components are the meaningful signal.
+def _symbol_text(name: str, content: str, file_path: str = "") -> str:
+    if file_path:
+        return f"{name} {file_path}".strip()
     return f"{name} {content[:500]}".strip()
 
 
@@ -26,7 +30,7 @@ def build_index(db_path: str, root_path: str, symbols: list[dict]) -> bool:
     if not symbols:
         return False
 
-    texts = [_symbol_text(s.get("name", ""), s.get("content", "")) for s in symbols]
+    texts = [_symbol_text(s.get("name", ""), s.get("content", ""), s.get("file_path", "")) for s in symbols]
     ids = [s["id"] for s in symbols]
 
     logger.info("[EMBED] Embedding %d symbols for %s ...", len(symbols), root_path)

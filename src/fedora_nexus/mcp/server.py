@@ -279,8 +279,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="search",
             description=(
-                "Full-text search across all indexed symbols (files, functions, classes, methods). "
-                "Returns BM25-ranked results."
+                "Hybrid BM25 + semantic search (RRF fusion) across all indexed symbols "
+                "(files, functions, classes, methods). "
+                "Use the optional kind filter to restrict results to a specific symbol type."
             ),
             inputSchema={
                 "type": "object",
@@ -288,9 +289,14 @@ async def list_tools() -> list[Tool]:
                     "root_path": {"type": "string"},
                     "query": {
                         "type": "string",
-                        "description": "Search query (keywords, function names, etc.)",
+                        "description": "Search query (keywords, function names, file paths, etc.)",
                     },
                     "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["function", "class", "method", "class_method", "file"],
+                        "description": "Optional: restrict results to this symbol type only.",
+                    },
                 },
                 "required": ["root_path", "query"],
             },
@@ -412,7 +418,8 @@ async def _dispatch(name: str, args: dict[str, Any]) -> Any:
         elif name == "search":
             result = await asyncio.to_thread(
                 _tool_search,
-                args["root_path"], args["query"], int(args.get("limit", 20))
+                args["root_path"], args["query"], int(args.get("limit", 20)),
+                args.get("kind") or None,
             )
         else:
             result = _error(f"Unknown tool: {name}", "UNKNOWN_TOOL")
@@ -538,11 +545,11 @@ def _tool_query_graph(root_path: str, cypher_query: str) -> dict:
         return _error(str(exc), "QUERY_ERROR")
 
 
-def _tool_search(root_path: str, query: str, limit: int = 20) -> dict:
+def _tool_search(root_path: str, query: str, limit: int = 20, kind: str | None = None) -> dict:
     rp = _translate_path(root_path)
     if not _os.path.isdir(rp) and not _get_store().repo_exists(rp):
         return _error(f"Repo not indexed: {rp}. Call index_repo first.", "REPO_NOT_FOUND")
-    results = _get_store().search(rp, query, limit)
+    results = _get_store().search(rp, query, limit, kind=kind)
     return {"results": results, "count": len(results), "query": query}
 
 
