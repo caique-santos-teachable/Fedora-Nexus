@@ -38,10 +38,27 @@ _RAILS_VALIDATION_NAMES = frozenset({
 
 _RAILS_SCOPE_NAMES = frozenset({"scope", "default_scope"})
 _RUBY_MIXIN_NAMES = frozenset({"include", "extend", "prepend"})
-_RUBY_ATTR_NAMES = frozenset({"attr_accessor", "attr_reader", "attr_writer"})
+_RUBY_ATTR_NAMES = frozenset({
+    "attr_accessor", "attr_reader", "attr_writer",
+    # Rails class/module-level attr macros
+    "cattr_accessor", "cattr_reader", "cattr_writer",
+    "mattr_accessor", "mattr_reader", "mattr_writer",
+})
 _RAILS_ENUM_NAMES = frozenset({"enum"})
 _RAILS_DELEGATION_NAMES = frozenset({"delegate", "delegates"})
 _RUBY_ALIAS_METHOD_NAMES = frozenset({"alias_method"})
+# store :column, :field1, :field2 — first sym is store column, rest are fields
+_RAILS_STORE_ACCESSOR_NAMES = frozenset({"store_accessor"})
+# ActionController helper exposure
+_RAILS_HELPER_METHOD_NAMES = frozenset({"helper_method"})
+# ActionController rescue handler
+_RAILS_RESCUE_FROM_NAMES = frozenset({"rescue_from"})
+# Dynamic method definition
+_RUBY_DEFINE_METHOD_NAMES = frozenset({"define_method"})
+# Class/module reopening via eval
+_RUBY_CLASS_EVAL_NAMES = frozenset({"class_eval", "module_eval"})
+# Visibility modifiers wrapping a def
+_RUBY_VISIBILITY_NAMES = frozenset({"private", "protected", "public"})
 
 
 def _ensure_node(graph: DependencyGraph, path: str, language: str) -> None:
@@ -178,7 +195,18 @@ class RubyIndexer:
         scope_stack: list[tuple[str, str]],
         source: str = "",
         top_level: dict[str, str] | None = None,
+        _in_singleton_class: bool = False,
     ) -> None:
+        if node.type == "singleton_class":
+            # class << self — walk body with flag set; methods inside are class methods.
+            # Do NOT push a new scope entry: these methods belong to the enclosing class/module.
+            for child in node.children:
+                self._walk_symbols(
+                    child, rel, graph, parent_id, scope_stack,
+                    source=source, top_level=top_level, _in_singleton_class=True,
+                )
+            return
+
         if node.type == "class":
             name_node = next((c for c in node.children if c.type == "constant"), None)
             if name_node:
@@ -212,7 +240,7 @@ class RubyIndexer:
                     self._walk_symbols(
                         child, rel, graph, sym_id,
                         scope_stack + [("class", class_name)],
-                        source=source, top_level=top_level,
+                        source=source, top_level=top_level, _in_singleton_class=False,
                     )
             return
 
@@ -253,7 +281,7 @@ class RubyIndexer:
                     self._walk_symbols(
                         child, rel, graph, sym_id,
                         scope_stack + [("module", mod_name)],
-                        source=source, top_level=top_level,
+                        source=source, top_level=top_level, _in_singleton_class=False,
                     )
             return
 
@@ -266,9 +294,11 @@ class RubyIndexer:
                 content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
                 prefix = "::".join(name for _, name in scope_stack)
                 qualified = f"{prefix}.{method_name}" if prefix else method_name
-                owner_name = scope_stack[-1][1] if scope_stack else ""
+                # owner_name carries the full qualified scope (FQCN) for predictable Cypher queries
+                owner_name = prefix
+                kind = "class_method" if _in_singleton_class else "method"
                 sym_id = f"{rel}#method:{qualified}"
-                graph.add_node(sym_id, language="ruby", kind="method",
+                graph.add_node(sym_id, language="ruby", kind=kind,
                                name=method_name, file_path=rel, start_line=start_line,
                                end_line=end_line, content=content,
                                is_exported=False, owner_name=owner_name)
@@ -286,7 +316,8 @@ class RubyIndexer:
                 content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
                 prefix = "::".join(name for _, name in scope_stack)
                 qualified = f"{prefix}.{method_name}" if prefix else method_name
-                owner_name = scope_stack[-1][1] if scope_stack else ""
+                # owner_name carries the full qualified scope (FQCN) for predictable Cypher queries
+                owner_name = prefix
                 sym_id = f"{rel}#method:{qualified}"
                 graph.add_node(sym_id, language="ruby", kind="class_method",
                                name=method_name, file_path=rel, start_line=start_line,
@@ -301,7 +332,7 @@ class RubyIndexer:
             id_node = next((c for c in node.children if c.type == "identifier"), None)
             if id_node is None:
                 for child in node.children:
-                    self._walk_symbols(child, rel, graph, parent_id, scope_stack, source=source, top_level=top_level)
+                    self._walk_symbols(child, rel, graph, parent_id, scope_stack, source=source, top_level=top_level, _in_singleton_class=_in_singleton_class)
                 return
             macro = id_node.text.decode("utf-8")
             start_line = node.start_point[0] + 1
@@ -476,6 +507,148 @@ class RubyIndexer:
                             graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 return
 
+            # ── store_accessor :col, :field1, :field2 ────────────────────────
+            if macro in _RAILS_STORE_ACCESSOR_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                if arg_list:
+                    syms = [c for c in arg_list.children if c.type == "simple_symbol"]
+                    # First symbol is the store column name — skip it
+                    store_col = syms[0].text.decode("utf-8").lstrip(":") if syms else "__unknown__"
+                    for sym_node in syms[1:]:
+                        attr_name = sym_node.text.decode("utf-8").lstrip(":")
+                        sym_id = f"{rel}#attr:{attr_name}"
+                        if not graph.has_node(sym_id):
+                            graph.add_node(sym_id, language="ruby", kind="attr",
+                                           name=attr_name, macro=macro, store=store_col,
+                                           file_path=rel, start_line=start_line,
+                                           content=content)
+                            graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            # ── helper_method :name, :other ──────────────────────────────────
+            if macro in _RAILS_HELPER_METHOD_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                if arg_list:
+                    for sym_node in arg_list.children:
+                        if sym_node.type == "simple_symbol":
+                            helper_name = sym_node.text.decode("utf-8").lstrip(":")
+                            sym_id = f"{rel}#helper_method:{helper_name}"
+                            if not graph.has_node(sym_id):
+                                graph.add_node(sym_id, language="ruby", kind="helper_method",
+                                               name=helper_name, file_path=rel,
+                                               start_line=start_line, content=content)
+                                graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            # ── rescue_from ExcClass, with: :handler ─────────────────────────
+            if macro in _RAILS_RESCUE_FROM_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                exception_name = "__unknown__"
+                handler_name: str | None = None
+                if arg_list:
+                    exc_node = next(
+                        (c for c in arg_list.children
+                         if c.type in ("constant", "scope_resolution")), None
+                    )
+                    if exc_node:
+                        exception_name = exc_node.text.decode("utf-8")
+                    with_pair = next(
+                        (c for c in arg_list.children
+                         if c.type == "pair" and c.children and
+                         c.children[0].text.decode("utf-8").rstrip(":") == "with"),
+                        None,
+                    )
+                    if with_pair and len(with_pair.children) >= 2:
+                        handler_name = with_pair.children[-1].text.decode("utf-8").lstrip(":")
+                sym_id = f"{rel}#rescue_from:{exception_name}"
+                if not graph.has_node(sym_id):
+                    rescue_kw: dict[str, Any] = dict(
+                        language="ruby", kind="rescue_from",
+                        name=exception_name, file_path=rel,
+                        start_line=start_line, content=content,
+                    )
+                    if handler_name:
+                        rescue_kw["handler"] = handler_name
+                    graph.add_node(sym_id, **rescue_kw)
+                    graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                return
+
+            # ── define_method(:name) { ... } ─────────────────────────────────
+            if macro in _RUBY_DEFINE_METHOD_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                if arg_list:
+                    sym_node = next(
+                        (c for c in arg_list.children if c.type == "simple_symbol"), None
+                    )
+                    if sym_node:
+                        method_name = sym_node.text.decode("utf-8").lstrip(":")
+                        end_line = node.end_point[0] + 1
+                        prefix = "::".join(name for _, name in scope_stack)
+                        qualified = f"{prefix}.{method_name}" if prefix else method_name
+                        owner_name = prefix
+                        sym_id = f"{rel}#method:{qualified}"
+                        if not graph.has_node(sym_id):
+                            graph.add_node(sym_id, language="ruby", kind="method",
+                                           name=method_name, file_path=rel,
+                                           start_line=start_line, end_line=end_line,
+                                           content=content, is_exported=False,
+                                           owner_name=owner_name, is_dynamic=True)
+                            graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                            if top_level is not None and len(scope_stack) == 1:
+                                top_level[qualified] = sym_id
+                return
+
+            # ── Klass.class_eval / Mod.module_eval { ... } ───────────────────
+            if macro in _RUBY_CLASS_EVAL_NAMES:
+                # Receiver is the first `constant` child (e.g. User in User.class_eval)
+                receiver = next((c for c in node.children if c.type == "constant"), None)
+                if receiver:
+                    recv_name = receiver.text.decode("utf-8")
+                    for child in node.children:
+                        if child.type in ("do_block", "block"):
+                            for body_child in child.children:
+                                self._walk_symbols(
+                                    body_child, rel, graph, parent_id,
+                                    scope_stack + [("class", recv_name)],
+                                    source=source, top_level=top_level, _in_singleton_class=False,
+                                )
+                return
+
+            # ── private/protected/public def foo / private :foo ───────────────
+            if macro in _RUBY_VISIBILITY_NAMES:
+                arg_list = next((c for c in node.children if c.type == "argument_list"), None)
+                if arg_list:
+                    method_node = next(
+                        (c for c in arg_list.children
+                         if c.type in ("method", "singleton_method")), None
+                    )
+                    if method_node:
+                        name_node = next(
+                            (c for c in method_node.children if c.type == "identifier"), None
+                        )
+                        if name_node:
+                            method_name = name_node.text.decode("utf-8")
+                            start_line_m = method_node.start_point[0] + 1
+                            end_line_m = method_node.end_point[0] + 1
+                            content_m = source.encode("utf-8")[method_node.start_byte:method_node.end_byte].decode("utf-8", errors="ignore")[:8000]
+                            prefix = "::".join(name for _, name in scope_stack)
+                            qualified = f"{prefix}.{method_name}" if prefix else method_name
+                            # owner_name carries the FQCN for predictable Cypher queries
+                            owner_name = prefix
+                            kind = "class_method" if (method_node.type == "singleton_method" or _in_singleton_class) else "method"
+                            sym_id = f"{rel}#method:{qualified}"
+                            if not graph.has_node(sym_id):
+                                graph.add_node(sym_id, language="ruby", kind=kind,
+                                               name=method_name, file_path=rel,
+                                               start_line=start_line_m, end_line=end_line_m,
+                                               content=content_m, is_exported=False,
+                                               owner_name=owner_name, visibility=macro)
+                                graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                                if top_level is not None and len(scope_stack) == 1:
+                                    top_level[qualified] = sym_id
+                # private :foo / bare private — no new node to create
+                return
+
         elif node.type == "assignment":
             lhs = node.children[0] if node.children else None
             if lhs and lhs.type == "constant":
@@ -484,12 +657,53 @@ class RubyIndexer:
                 qualified_const = f"{namespace}::{const_name}" if namespace else const_name
                 start_line = node.start_point[0] + 1
                 content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:500]
+                # Detect Struct.new / Data.define on the RHS
+                rhs = node.children[-1] if len(node.children) >= 3 else None
+                kind = "constant"
                 sym_id = f"{rel}#constant:{qualified_const}"
+                fields: list[str] = []
+                if rhs and rhs.type == "call":
+                    recv = next((c for c in rhs.children if c.type == "constant"), None)
+                    meth = next((c for c in rhs.children if c.type == "identifier"), None)
+                    if recv and meth:
+                        recv_name = recv.text.decode("utf-8")
+                        meth_name = meth.text.decode("utf-8")
+                        if recv_name == "Struct" and meth_name == "new":
+                            kind = "struct"
+                            sym_id = f"{rel}#struct:{qualified_const}"
+                            arg_list = next(
+                                (c for c in rhs.children if c.type == "argument_list"), None
+                            )
+                            if arg_list:
+                                fields = [
+                                    c.text.decode("utf-8").lstrip(":")
+                                    for c in arg_list.children
+                                    if c.type == "simple_symbol"
+                                ]
+                        elif recv_name == "Data" and meth_name == "define":
+                            kind = "data_class"
+                            sym_id = f"{rel}#data_class:{qualified_const}"
+                            arg_list = next(
+                                (c for c in rhs.children if c.type == "argument_list"), None
+                            )
+                            if arg_list:
+                                fields = [
+                                    c.text.decode("utf-8").lstrip(":")
+                                    for c in arg_list.children
+                                    if c.type == "simple_symbol"
+                                ]
                 if not graph.has_node(sym_id):
-                    graph.add_node(sym_id, language="ruby", kind="constant",
-                                   name=const_name, file_path=rel,
-                                   start_line=start_line, content=content)
+                    node_kw: dict[str, Any] = dict(
+                        language="ruby", kind=kind,
+                        name=const_name, file_path=rel,
+                        start_line=start_line, content=content,
+                    )
+                    if fields:
+                        node_kw["fields"] = fields
+                    graph.add_node(sym_id, **node_kw)
                     graph.add_edge(parent_id, sym_id, rel="CONTAINS")
+                    if top_level is not None and not scope_stack:
+                        top_level[const_name] = sym_id
             return
 
         elif node.type == "alias":
@@ -509,7 +723,7 @@ class RubyIndexer:
             return
 
         for child in node.children:
-            self._walk_symbols(child, rel, graph, parent_id, scope_stack, source=source, top_level=top_level)
+            self._walk_symbols(child, rel, graph, parent_id, scope_stack, source=source, top_level=top_level, _in_singleton_class=_in_singleton_class)
 
     # ── CALLS ─────────────────────────────────────────────────────────────────
 

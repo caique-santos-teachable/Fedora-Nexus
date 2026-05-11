@@ -917,3 +917,348 @@ def test_ruby_new_node_kinds_have_content(tmp_path):
         assert graph.has_node(sym_id), f"Missing node: {sym_id}"
         attrs = graph.node_attrs(sym_id)
         assert attrs.get("content"), f"Missing content on {sym_id}"
+
+
+# ── Ruby gap batch #2: cattr/mattr, store_accessor, helper_method, rescue_from,
+#    define_method, class_eval, private/protected def, Struct/Data ─────────────
+
+def test_ruby_cattr_accessor(tmp_path):
+    (tmp_path / "model.rb").write_text(
+        "class User\n"
+        "  cattr_accessor :current_user, :locale\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    nodes = {n["id"]: n for n in adj["nodes"]}
+    assert "model.rb#attr:current_user" in nodes, "cattr_accessor :current_user not indexed"
+    assert "model.rb#attr:locale" in nodes, "cattr_accessor :locale not indexed"
+    assert nodes["model.rb#attr:current_user"]["kind"] == "attr"
+
+
+def test_ruby_mattr_accessor(tmp_path):
+    (tmp_path / "config.rb").write_text(
+        "module AppConfig\n"
+        "  mattr_accessor :debug_mode\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("config.rb#attr:debug_mode")
+    assert graph.node_attrs("config.rb#attr:debug_mode")["kind"] == "attr"
+
+
+def test_ruby_store_accessor_skips_column_indexes_fields(tmp_path):
+    (tmp_path / "profile.rb").write_text(
+        "class Profile\n"
+        "  store_accessor :preferences, :theme, :locale\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    # :preferences is the store column — should NOT be indexed
+    assert not graph.has_node("profile.rb#attr:preferences"), \
+        "store column should not be indexed as attr"
+    # :theme and :locale are fields — should be indexed
+    assert graph.has_node("profile.rb#attr:theme"), "store field :theme not indexed"
+    assert graph.has_node("profile.rb#attr:locale"), "store field :locale not indexed"
+    assert graph.node_attrs("profile.rb#attr:theme")["store"] == "preferences"
+
+
+def test_ruby_helper_method(tmp_path):
+    (tmp_path / "app_controller.rb").write_text(
+        "class ApplicationController\n"
+        "  helper_method :current_user, :signed_in?\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    nodes = {n["id"]: n for n in adj["nodes"]}
+    assert "app_controller.rb#helper_method:current_user" in nodes
+    assert "app_controller.rb#helper_method:signed_in?" in nodes
+    assert nodes["app_controller.rb#helper_method:current_user"]["kind"] == "helper_method"
+
+
+def test_ruby_rescue_from_with_handler(tmp_path):
+    (tmp_path / "ctrl.rb").write_text(
+        "class ApplicationController\n"
+        "  rescue_from ActiveRecord::RecordNotFound, with: :not_found\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "ctrl.rb#rescue_from:ActiveRecord::RecordNotFound"
+    assert graph.has_node(sym_id), f"rescue_from node not indexed: {sym_id}"
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "rescue_from"
+    assert attrs.get("handler") == "not_found"
+
+
+def test_ruby_rescue_from_without_handler(tmp_path):
+    (tmp_path / "ctrl.rb").write_text(
+        "class ApplicationController\n"
+        "  rescue_from StandardError\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "ctrl.rb#rescue_from:StandardError"
+    assert graph.has_node(sym_id)
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "rescue_from"
+    assert "handler" not in attrs
+
+
+def test_ruby_define_method_creates_method_node(tmp_path):
+    (tmp_path / "model.rb").write_text(
+        "class User\n"
+        "  define_method(:greet) { |name| \"hello #{name}\" }\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "model.rb#method:User.greet"
+    assert graph.has_node(sym_id), f"define_method node not indexed: {sym_id}"
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "method"
+    assert attrs.get("is_dynamic") is True
+
+
+def test_ruby_class_eval_indexes_methods_at_receiver_scope(tmp_path):
+    (tmp_path / "ext.rb").write_text(
+        "User.class_eval do\n"
+        "  def display_name\n"
+        "    name\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "ext.rb#method:User.display_name"
+    assert graph.has_node(sym_id), f"class_eval method not indexed: {sym_id}"
+    assert graph.node_attrs(sym_id)["kind"] == "method"
+
+
+def test_ruby_module_eval_indexes_methods_at_receiver_scope(tmp_path):
+    (tmp_path / "ext.rb").write_text(
+        "MyMod.module_eval do\n"
+        "  def helper\n"
+        "    true\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("ext.rb#method:MyMod.helper")
+
+
+def test_ruby_private_def_creates_method_with_visibility(tmp_path):
+    (tmp_path / "service.rb").write_text(
+        "class PaymentService\n"
+        "  private def secret_key\n"
+        "    ENV['KEY']\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "service.rb#method:PaymentService.secret_key"
+    assert graph.has_node(sym_id), "private def not indexed"
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "method"
+    assert attrs.get("visibility") == "private"
+
+
+def test_ruby_protected_def_creates_method_with_visibility(tmp_path):
+    (tmp_path / "model.rb").write_text(
+        "class Account\n"
+        "  protected def balance_check\n"
+        "    balance > 0\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "model.rb#method:Account.balance_check"
+    assert graph.has_node(sym_id), "protected def not indexed"
+    assert graph.node_attrs(sym_id).get("visibility") == "protected"
+
+
+def test_ruby_struct_new_creates_struct_node(tmp_path):
+    (tmp_path / "types.rb").write_text(
+        "Point = Struct.new(:x, :y)\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "types.rb#struct:Point"
+    assert graph.has_node(sym_id), f"Struct.new not indexed as struct: {sym_id}"
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "struct"
+    assert set(attrs.get("fields", [])) == {"x", "y"}
+
+
+def test_ruby_struct_new_does_not_create_constant_node(tmp_path):
+    (tmp_path / "types.rb").write_text(
+        "Point = Struct.new(:x, :y)\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    # Must be indexed as struct, NOT as plain constant
+    assert not graph.has_node("types.rb#constant:Point"), \
+        "Struct.new should be kind=struct, not kind=constant"
+
+
+def test_ruby_data_define_creates_data_class_node(tmp_path):
+    (tmp_path / "value_objects.rb").write_text(
+        "Measure = Data.define(:amount, :unit)\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "value_objects.rb#data_class:Measure"
+    assert graph.has_node(sym_id), f"Data.define not indexed: {sym_id}"
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "data_class"
+    assert set(attrs.get("fields", [])) == {"amount", "unit"}
+
+
+# ── P0 regression: class << self (singleton class) ───────────────────────────
+
+def test_ruby_singleton_class_methods_are_extracted(tmp_path):
+    """Methods defined inside class << self must be indexed (count > 0)."""
+    (tmp_path / "pricing_plan_handler.rb").write_text(
+        "module PublicApi\n"
+        "  module V2\n"
+        "    class PricingPlanHandler\n"
+        "      class << self\n"
+        "        def model\n"
+        "          Plan\n"
+        "        end\n"
+        "        def base_relation(scope)\n"
+        "          model.where(active: true)\n"
+        "        end\n"
+        "        def allowed_attributes\n"
+        "          %i[name amount]\n"
+        "        end\n"
+        "      end\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    methods = [
+        n for n in adj["nodes"]
+        if n.get("kind") in ("method", "class_method")
+        and n.get("file_path", "").endswith("pricing_plan_handler.rb")
+    ]
+    assert len(methods) >= 1, "Expected methods from class << self; got 0"
+
+
+def test_ruby_singleton_class_methods_have_kind_class_method(tmp_path):
+    """Methods inside class << self must have kind='class_method', not 'method'."""
+    (tmp_path / "handler.rb").write_text(
+        "class Handler\n"
+        "  class << self\n"
+        "    def model; end\n"
+        "    def base_relation; end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    for name in ("model", "base_relation"):
+        node = next(
+            (n for n in adj["nodes"] if n.get("name") == name and "handler.rb" in n.get("file_path", "")),
+            None,
+        )
+        assert node is not None, f"Method {name} not found"
+        assert node["kind"] == "class_method", (
+            f"Method {name} inside class << self should be 'class_method', got '{node['kind']}'"
+        )
+
+
+def test_ruby_singleton_class_contains_edge_points_to_enclosing_class(tmp_path):
+    """CONTAINS edge for singleton class methods must come from the enclosing Class node."""
+    (tmp_path / "handler.rb").write_text(
+        "class MyHandler\n"
+        "  class << self\n"
+        "    def process; end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    contains = [e for e in adj["edges"] if e["rel"] == "CONTAINS"]
+    # The method must be owned by the class, not by a spurious singleton scope
+    assert any(
+        e["from"] == "handler.rb#class:MyHandler"
+        and e["to"] == "handler.rb#method:MyHandler.process"
+        for e in contains
+    ), f"CONTAINS edge from class to singleton method missing; edges={contains}"
+
+
+def test_ruby_singleton_class_owner_name_is_fqcn(tmp_path):
+    """owner_name must be the fully-qualified class name, matching the id prefix."""
+    (tmp_path / "handler.rb").write_text(
+        "module Api\n"
+        "  class Handler\n"
+        "    class << self\n"
+        "      def call; end\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "handler.rb#method:Api::Handler.call"
+    assert graph.has_node(sym_id), f"Method node not found: {sym_id}"
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "class_method"
+    # owner_name must be the FQCN, not just 'Handler'
+    assert attrs["owner_name"] == "Api::Handler", (
+        f"owner_name should be 'Api::Handler', got '{attrs['owner_name']}'"
+    )
+
+
+# ── P0 baseline: def self.method must still work after the fix ────────────────
+
+def test_ruby_def_self_method_still_indexed_after_singleton_class_fix(tmp_path):
+    """def self.foo (singleton_method) must continue to produce kind=class_method."""
+    (tmp_path / "product_handler.rb").write_text(
+        "module PublicApi\n"
+        "  module V2\n"
+        "    class ProductHandler\n"
+        "      def self.model\n"
+        "        Product\n"
+        "      end\n"
+        "      def self.allowed_attributes\n"
+        "        %i[name price]\n"
+        "      end\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    methods = [
+        n for n in adj["nodes"]
+        if n.get("kind") == "class_method"
+        and n.get("file_path", "").endswith("product_handler.rb")
+    ]
+    assert len(methods) >= 1, "def self.* methods must still be indexed with kind=class_method"
+    # Verify FQCN owner_name
+    for m in methods:
+        assert m["owner_name"] == "PublicApi::V2::ProductHandler", (
+            f"owner_name should be FQCN, got '{m['owner_name']}'"
+        )
+
+
+# ── P1: owner_name FQCN consistency for instance methods ─────────────────────
+
+def test_ruby_instance_method_owner_name_is_fqcn(tmp_path):
+    """Instance methods must also have FQCN owner_name, not just the simple class name."""
+    (tmp_path / "refund.rb").write_text(
+        "module Transactions\n"
+        "  class Refund\n"
+        "    def call\n"
+        "      true\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "refund.rb#method:Transactions::Refund.call"
+    assert graph.has_node(sym_id)
+    attrs = graph.node_attrs(sym_id)
+    # owner_name must match the qualified namespace, enabling WHERE m.owner_name STARTS WITH 'Transactions::Refund'
+    assert attrs["owner_name"] == "Transactions::Refund", (
+        f"owner_name should be 'Transactions::Refund', got '{attrs['owner_name']}'"
+    )
+

@@ -103,6 +103,12 @@ def _get_model():
         import os
         cache_dir = os.environ.get("FASTEMBED_CACHE_PATH") or None
         logger.info("[EMBED] Loading embedding model ...")
-        _MODEL_INSTANCE = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", cache_dir=cache_dir)
+        _MODEL_INSTANCE = TextEmbedding(
+            model_name="BAAI/bge-small-en-v1.5",
+            cache_dir=cache_dir,
+            # Limit ONNX Runtime intra-op threads so background embedding doesn't
+            # saturate the CPU when a concurrent index request is being parsed.
+            threads=2,
+        )
         logger.info("[EMBED] Model ready.")
     return _MODEL_INSTANCE

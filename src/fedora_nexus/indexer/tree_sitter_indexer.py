@@ -151,7 +151,7 @@ class TreeSitterIndexer(BaseIndexer):
                 return None
             return rel, lang, f, source, tree
 
-        n_workers = min(os.cpu_count() or 4, max(len(all_files), 1), 16)
+        n_workers = max(min(os.cpu_count() or 4, max(len(all_files), 1), 16), 1)
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {pool.submit(_read_and_parse_file, lf): lf for lf in all_files}
             for future in as_completed(futures):
