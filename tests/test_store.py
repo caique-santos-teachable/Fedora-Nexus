@@ -66,6 +66,41 @@ def test_list_repos(store, sample_graph):
     store.delete_repo(root)
 
 
+def test_list_repos_edges_counts_symbol_level_edges(store):
+    """list_repos edge count must include Method→Class CALLS, not just File→File edges.
+
+    Regression: the original query used MATCH (a:File {...})-[:CodeRelation]->()
+    which silently dropped all edges originating from Method/Class/Function nodes.
+    """
+    g = DependencyGraph()
+    root = "/tmp/test_repo_edge_count"
+    # File nodes
+    g.add_node("src/a.py", language="python", kind="file")
+    g.add_node("src/b.py", language="python", kind="file")
+    # Symbol nodes
+    g.add_node("src/a.py#method:Foo.bar", language="python", kind="method",
+               name="bar", file_path="src/a.py", content="", start_line=1, end_line=3)
+    g.add_node("src/b.py#class:Baz", language="python", kind="class",
+               name="Baz", file_path="src/b.py", content="", start_line=1, end_line=5)
+    # File-level DEPENDS_ON
+    g.add_edge("src/a.py", "src/b.py", rel="DEPENDS_ON")
+    # Symbol-level CALLS (Method → Class) — was NOT counted before fix
+    g.add_edge("src/a.py#method:Foo.bar", "src/b.py#class:Baz", rel="CALLS")
+    # CONTAINS edges
+    g.add_edge("src/a.py", "src/a.py#method:Foo.bar", rel="CONTAINS")
+    g.add_edge("src/b.py", "src/b.py#class:Baz", rel="CONTAINS")
+
+    store.save_graph(root, g)
+    repos = store.list_repos()
+    match = next(r for r in repos if r["root_path"] == root)
+    # 4 edges total: 1 DEPENDS_ON + 1 CALLS + 2 CONTAINS
+    assert match["edges"] == 4, (
+        f"Expected 4 edges (including symbol-level CALLS), got {match['edges']}. "
+        "Likely cause: edge query filtered to File-origin edges only."
+    )
+    store.delete_repo(root)
+
+
 def test_delete_nonexistent_returns_false(store):
     assert not store.delete_repo("/tmp/never_existed_xyz")
 

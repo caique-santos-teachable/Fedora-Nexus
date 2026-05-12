@@ -480,7 +480,7 @@ class KuzuGraphStore:
                     counts[table] = 0
             try:
                 r3 = self._conn.execute(
-                    "MATCH (a:File {root_path: $rp})-[:CodeRelation]->() RETURN count(*)",
+                    "MATCH (a)-[:CodeRelation]->() WHERE a.root_path = $rp RETURN count(*)",
                     {"rp": root_path},
                 )
                 edge_count = r3.get_next()[0] if r3.has_next() else 0
