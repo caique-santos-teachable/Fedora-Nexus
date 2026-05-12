@@ -24,6 +24,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from fedora_nexus import __version__
 from fedora_nexus.graph.blast_radius import blast_radius as _blast_radius
 from fedora_nexus.graph.engine import DependencyGraph
 from fedora_nexus.indexer.tree_sitter_indexer import TreeSitterIndexer
@@ -32,6 +33,7 @@ from fedora_nexus.store.kuzu_store import KuzuGraphStore
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+logger.info("fedora-nexus server v%s starting", __version__)
 
 app = Server("fedora-nexus")
 

@@ -73,6 +73,10 @@ mkdir -p "$BUILD_CACHE_DIR"
 
 step "Building fedora-nexus CLI (Go 1.22, inside Docker)..."
 
+# Extract version from pyproject.toml (single source of truth)
+CLI_VERSION=$(grep '^version' "$REPO_DIR/pyproject.toml" | sed 's/.*= *"//' | sed 's/"//')
+info "Version: $CLI_VERSION"
+
 docker run --rm \
   -v "$CLI_DIR":/src:ro \
   -v "$BUILD_CACHE_DIR":/out \
@@ -80,7 +84,7 @@ docker run --rm \
   -e GOARCH="$GOARCH" \
   -e CGO_ENABLED=0 \
   golang:1.22-alpine \
-  sh -c "cd /src && go mod download && go build -ldflags='-s -w' -o /out/fedora-nexus ."
+  sh -c "cd /src && go mod download && go build -ldflags=\"-s -w -X 'fedora-nexus/cmd.Version=${CLI_VERSION}'\" -o /out/fedora-nexus ."
 
 info "Binary built → $BUILD_CACHE_DIR/fedora-nexus"
 

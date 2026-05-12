@@ -9,14 +9,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version is set at build time via -ldflags "-X fedora-nexus/cmd.Version=x.y.z".
+// Falls back to "dev" when built without the flag (e.g. `go run`).
+var Version = "dev"
+
 var (
 	serverFlag string
 	jsonFlag   bool
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "fedora-nexus",
-	Short: "Code dependency graph — index, query, and explore your codebase",
+	Use:     "fedora-nexus",
+	Short:   "Code dependency graph — index, query, and explore your codebase",
+	Version: Version,
 	Long: `fedora-nexus analyses code dependencies using a graph database.
 
 The CLI connects to a running fedora-nexus server (Docker container).
