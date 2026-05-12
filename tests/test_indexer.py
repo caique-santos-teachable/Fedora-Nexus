@@ -1415,6 +1415,86 @@ def test_ruby_module_node_present_in_graph(tmp_path):
     assert attrs["name"] == "Publishable"
 
 
+# ── Ruby scope_resolution module/class names ─────────────────────────────────
+
+def test_ruby_module_scope_resolution_name_indexed(tmp_path):
+    """module Foo::Bar::V2 (scope_resolution name) must produce a module node."""
+    (tmp_path / "transactions_controller.rb").write_text(
+        "module PublicApi::AdminApi::V2\n"
+        "  class TransactionsController\n"
+        "    def index; end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    mod_id = "transactions_controller.rb#module:PublicApi::AdminApi::V2"
+    assert graph.has_node(mod_id), "scope_resolution module node must be indexed"
+    attrs = graph.node_attrs(mod_id)
+    assert attrs["kind"] == "module"
+
+
+def test_ruby_class_inside_scope_resolution_module_indexed(tmp_path):
+    """class inside module Foo::Bar must produce a qualified class node with methods."""
+    (tmp_path / "transactions_controller.rb").write_text(
+        "module PublicApi::AdminApi::V2\n"
+        "  class TransactionsController\n"
+        "    def index; end\n"
+        "    def show; end\n"
+        "    private\n"
+        "    def refund_params; end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    cls_id = "transactions_controller.rb#class:PublicApi::AdminApi::V2::TransactionsController"
+    assert graph.has_node(cls_id), "class nested in scope_resolution module must be indexed"
+    attrs = graph.node_attrs(cls_id)
+    assert attrs["kind"] == "class"
+    assert attrs["name"] == "TransactionsController"
+    # Methods must be indexed under the fully-qualified owner
+    for method in ("index", "show", "refund_params"):
+        mid = f"transactions_controller.rb#method:PublicApi::AdminApi::V2::TransactionsController.{method}"
+        assert graph.has_node(mid), f"method {method} must be indexed under FQCN"
+
+
+def test_ruby_scope_resolution_module_contains_class_edge(tmp_path):
+    """module Foo::Bar must have a CONTAINS edge to the class nested inside."""
+    (tmp_path / "ctrl.rb").write_text(
+        "module PublicApi::V2\n"
+        "  class ItemsController\n"
+        "    def index; end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    mod_id = "ctrl.rb#module:PublicApi::V2"
+    cls_id = "ctrl.rb#class:PublicApi::V2::ItemsController"
+    contains_edges = {(e["from"], e["to"]) for e in adj["edges"] if e.get("rel") == "CONTAINS"}
+    assert (mod_id, cls_id) in contains_edges, (
+        f"Expected CONTAINS edge {mod_id} → {cls_id}; got: {contains_edges}"
+    )
+
+
+def test_ruby_class_scope_resolution_superclass_indexed(tmp_path):
+    """class Foo < Bar::ApplicationController must record the short superclass name."""
+    (tmp_path / "ctrl.rb").write_text(
+        "module PublicApi::V2\n"
+        "  class ItemsController < PublicApi::V2::ApplicationController\n"
+        "    def index; end\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    cls_id = "ctrl.rb#class:PublicApi::V2::ItemsController"
+    assert graph.has_node(cls_id)
+    attrs = graph.node_attrs(cls_id)
+    # superclass is stored as last segment of the scope_resolution
+    assert attrs.get("superclass") == "ApplicationController", (
+        f"Expected superclass='ApplicationController'; got {attrs.get('superclass')}"
+    )
+
+
 # ── Ruby scope_refs: constant refs in method bodies ───────────────────────────
 
 def test_ruby_collect_const_refs_scope_resolution(tmp_path):

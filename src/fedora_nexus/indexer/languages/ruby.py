@@ -399,17 +399,29 @@ class RubyIndexer:
             return
 
         if node.type == "class":
-            name_node = next((c for c in node.children if c.type == "constant"), None)
+            # Accept both a plain constant (class Course) and a scope_resolution
+            # name (class Foo::Bar or class PublicApi::V2::Controller).
+            name_node = next(
+                (c for c in node.children if c.type in ("constant", "scope_resolution")),
+                None,
+            )
             if name_node:
-                class_name = name_node.text.decode("utf-8")
+                class_name = name_node.text.decode("utf-8")   # e.g. "Foo::Bar" or "Course"
+                short_name = class_name.split("::")[-1]        # last segment only
                 namespace = "::".join(n for _, n in scope_stack)
                 qualified_class_name = f"{namespace}::{class_name}" if namespace else class_name
                 superclass_node = next((c for c in node.children if c.type == "superclass"), None)
                 superclass_name: str | None = None
                 if superclass_node:
-                    const_node = next((c for c in superclass_node.children if c.type == "constant"), None)
-                    if const_node:
-                        superclass_name = const_node.text.decode("utf-8")
+                    # Also accept scope_resolution superclasses (e.g. < Foo::ApplicationController)
+                    sc_node = next(
+                        (c for c in superclass_node.children
+                         if c.type in ("constant", "scope_resolution")),
+                        None,
+                    )
+                    if sc_node:
+                        # Use only the last segment — sym_to_file is keyed by simple names
+                        superclass_name = sc_node.text.decode("utf-8").split("::")[-1]
                 start_line = node.start_point[0] + 1
                 end_line = node.end_point[0] + 1
                 content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
@@ -425,20 +437,28 @@ class RubyIndexer:
                 graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 if top_level is not None:
                     top_level[qualified_class_name] = sym_id
-                    if not scope_stack:
-                        top_level[class_name] = sym_id
+                    # Register the short (last-segment) name so sym_to_file resolves
+                    # references to just the simple class name across files.
+                    if not scope_stack or "::".join(n for _, n in scope_stack) not in qualified_class_name[:-len(short_name)]:
+                        top_level[short_name] = sym_id
                 for child in node.children:
                     self._walk_symbols(
                         child, rel, graph, sym_id,
-                        scope_stack + [("class", class_name)],
+                        scope_stack + [("class", class_name)],  # full name in scope
                         source=source, top_level=top_level, _in_singleton_class=False,
                     )
             return
 
         elif node.type == "module":
-            name_node = next((c for c in node.children if c.type == "constant"), None)
+            # Accept both a plain constant (module Publishable) and a scope_resolution
+            # name (module PublicApi::AdminApi::V2).
+            name_node = next(
+                (c for c in node.children if c.type in ("constant", "scope_resolution")),
+                None,
+            )
             if name_node:
-                mod_name = name_node.text.decode("utf-8")
+                mod_name = name_node.text.decode("utf-8")   # e.g. "PublicApi::AdminApi::V2"
+                short_name = mod_name.split("::")[-1]        # last segment only
                 namespace = "::".join(n for _, n in scope_stack)
                 qualified_mod_name = f"{namespace}::{mod_name}" if namespace else mod_name
                 start_line = node.start_point[0] + 1
@@ -466,12 +486,15 @@ class RubyIndexer:
                 graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 if top_level is not None:
                     top_level[qualified_mod_name] = sym_id
-                    if not scope_stack:
+                    # Always register the short name so sym_to_file resolves simple refs
+                    top_level[short_name] = sym_id
+                    # When scope_resolution, also register the full (unqualified) name
+                    if "::".join(n for _, n in scope_stack) and mod_name not in top_level:
                         top_level[mod_name] = sym_id
                 for child in node.children:
                     self._walk_symbols(
                         child, rel, graph, sym_id,
-                        scope_stack + [("module", mod_name)],
+                        scope_stack + [("module", mod_name)],  # full name in scope
                         source=source, top_level=top_level, _in_singleton_class=False,
                     )
             return
