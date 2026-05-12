@@ -238,6 +238,26 @@ class TreeSitterIndexer(BaseIndexer):
             for rel in ruby_files:
                 self._ruby.resolve_cross_file_deps(rel, graph, file_symbols, sym_to_file)
 
+        # ── TypeScript/JavaScript cross-file CALLS post-pass ─────────────────────
+        # Resolves PascalCase type_identifier refs captured in method/function bodies
+        # to File→File DEPENDS_ON and Method/Function→Class CALLS edges.
+        # Only hits repos with TS/JS symbols — no-op otherwise.
+        ts_files = [
+            rel for rel, (lang, *_) in parsed_trees.items()
+            if lang in ("typescript", "javascript")
+        ]
+        if ts_files:
+            sym_to_file_ts: dict[str, str] = {}
+            for file_rel, syms in file_symbols.items():
+                if parsed_trees.get(file_rel, (None,))[0] in ("typescript", "javascript"):
+                    for name in syms:
+                        if name not in sym_to_file_ts:
+                            sym_to_file_ts[name] = file_rel
+            for rel in ts_files:
+                self._typescript.resolve_cross_file_deps(
+                    rel, graph, file_symbols, sym_to_file_ts
+                )
+
         # ── CALLS pass ────────────────────────────────────────────────────────
         for rel, (lang, tree, _f, _source) in parsed_trees.items():
             imported_symbols = self._collect_imported_symbols(rel, graph, file_symbols, depth=2)

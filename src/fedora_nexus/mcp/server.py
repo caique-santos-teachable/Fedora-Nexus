@@ -242,7 +242,10 @@ async def list_tools() -> list[Tool]:
             name="get_graph",
             description=(
                 "Return the full dependency graph as adjacency JSON (nodes + edges). "
-                "Pass subgraph_paths to get a subgraph of specific nodes."
+                "Pass subgraph_paths to get a subgraph of specific nodes. "
+                "Use max_nodes (default 500) to cap the response size — "
+                "if the graph exceeds the limit the response includes "
+                "truncated=true and total_nodes/total_edges counts."
             ),
             inputSchema={
                 "type": "object",
@@ -252,6 +255,13 @@ async def list_tools() -> list[Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "If provided, returns only the subgraph of these nodes",
+                    },
+                    "max_nodes": {
+                        "type": "integer",
+                        "default": 500,
+                        "minimum": 1,
+                        "maximum": 10000,
+                        "description": "Maximum number of nodes to return. File nodes are prioritised. Use subgraph_paths for targeted queries on large repos.",
                     },
                 },
                 "required": ["root_path"],
@@ -416,7 +426,7 @@ async def _dispatch(name: str, args: dict[str, Any]) -> Any:
         elif name == "get_graph":
             result = await asyncio.to_thread(
                 _tool_get_graph,
-                args["root_path"], args.get("subgraph_paths")
+                args["root_path"], args.get("subgraph_paths"), int(args.get("max_nodes", 500))
             )
         elif name == "list_repos":
             result = await asyncio.to_thread(_tool_list_repos)
@@ -562,12 +572,33 @@ def _tool_search(root_path: str, query: str, limit: int = 20, kind: str | None =
     return {"results": results, "count": len(results), "query": query}
 
 
-def _tool_get_graph(root_path: str, subgraph_paths: list[str] | None) -> dict:
+def _tool_get_graph(root_path: str, subgraph_paths: list[str] | None, max_nodes: int = 500) -> dict:
     root_path = _translate_path(root_path)
     graph = _require_graph(root_path)
     if subgraph_paths:
         return graph.subgraph(subgraph_paths)
-    return graph.to_adjacency_json()
+    data = graph.to_adjacency_json()
+    total_nodes = len(data["nodes"])
+    total_edges = len(data["edges"])
+    if total_nodes > max_nodes:
+        # Prioritise file nodes, then symbols, up to max_nodes.
+        file_nodes = [n for n in data["nodes"] if n.get("kind") == "file"]
+        sym_nodes = [n for n in data["nodes"] if n.get("kind") != "file"]
+        truncated_nodes = (file_nodes + sym_nodes)[:max_nodes]
+        truncated_ids = {n["id"] for n in truncated_nodes}
+        truncated_edges = [
+            e for e in data["edges"]
+            if e["from"] in truncated_ids and e["to"] in truncated_ids
+        ]
+        return {
+            "nodes": truncated_nodes,
+            "edges": truncated_edges,
+            "truncated": True,
+            "total_nodes": total_nodes,
+            "total_edges": total_edges,
+            "hint": f"Graph has {total_nodes} nodes. Increase max_nodes or use subgraph_paths / query_graph for targeted access.",
+        }
+    return data
 
 
 def _tool_list_repos() -> dict:

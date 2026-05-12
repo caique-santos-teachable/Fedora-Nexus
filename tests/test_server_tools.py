@@ -332,3 +332,75 @@ def test_file_nodes_included_in_embed_symbols():
     assert len(file_symbols) >= 1, "Expected at least one file node in embed symbols"
     assert file_symbols[0]["id"] == "src/a.py"
     assert "::" not in file_symbols[0]["id"]
+
+
+# ── get_graph max_nodes truncation ────────────────────────────────────────────
+
+def _make_large_graph(n_files: int = 10, n_funcs_per_file: int = 5) -> DependencyGraph:
+    g = DependencyGraph()
+    for i in range(n_files):
+        fid = f"file_{i}.py"
+        g.add_node(fid, language="python", kind="file")
+        for j in range(n_funcs_per_file):
+            sym_id = f"file_{i}.py#function:fn_{j}"
+            g.add_node(sym_id, language="python", kind="function")
+            g.add_edge(fid, sym_id)
+    return g
+
+
+def test_get_graph_no_truncation_under_limit():
+    """When node count <= max_nodes, returns full graph without truncated flag."""
+    g = _make_large_graph(n_files=2, n_funcs_per_file=2)  # 2 + 4 = 6 nodes
+    mock_store = MagicMock()
+    mock_store.load_graph.return_value = g
+
+    with patch("fedora_nexus.mcp.server._get_store", return_value=mock_store):
+        result = _tool_get_graph("/repo", None, max_nodes=100)
+
+    assert result.get("truncated") is not True
+    assert len(result["nodes"]) == 6
+
+
+def test_get_graph_truncates_to_max_nodes():
+    """When node count > max_nodes, response is capped and truncated=True is set."""
+    g = _make_large_graph(n_files=10, n_funcs_per_file=5)  # 10 + 50 = 60 nodes
+    mock_store = MagicMock()
+    mock_store.load_graph.return_value = g
+
+    with patch("fedora_nexus.mcp.server._get_store", return_value=mock_store):
+        result = _tool_get_graph("/repo", None, max_nodes=15)
+
+    assert result["truncated"] is True
+    assert len(result["nodes"]) == 15
+    assert result["total_nodes"] == 60
+    assert "total_edges" in result
+
+
+def test_get_graph_file_nodes_prioritised_on_truncation():
+    """File nodes come first in the truncated list."""
+    g = _make_large_graph(n_files=10, n_funcs_per_file=5)  # 10 file + 50 func nodes
+    mock_store = MagicMock()
+    mock_store.load_graph.return_value = g
+
+    with patch("fedora_nexus.mcp.server._get_store", return_value=mock_store):
+        result = _tool_get_graph("/repo", None, max_nodes=5)
+
+    # With only 5 nodes kept and 10 file nodes total, all 5 should be file nodes
+    # (or at least file nodes come before symbols when sorted by priority)
+    node_kinds = [n.get("kind") for n in result["nodes"]]
+    # All kept nodes should be file nodes since max_nodes(5) < n_files(10)
+    assert all(k == "file" for k in node_kinds), \
+        f"Expected only file nodes with max_nodes=5, got: {node_kinds}"
+
+
+def test_get_graph_subgraph_ignores_max_nodes():
+    """When subgraph_paths is passed, max_nodes must be ignored (no truncation)."""
+    g = _make_large_graph(n_files=3, n_funcs_per_file=2)
+    mock_store = MagicMock()
+    mock_store.load_graph.return_value = g
+
+    with patch("fedora_nexus.mcp.server._get_store", return_value=mock_store):
+        result = _tool_get_graph("/repo", ["file_0.py", "file_1.py"], max_nodes=1)
+
+    # subgraph_paths path should bypass truncation
+    assert result.get("truncated") is not True

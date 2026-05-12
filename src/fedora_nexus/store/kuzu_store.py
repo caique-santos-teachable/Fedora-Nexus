@@ -139,8 +139,20 @@ class KuzuGraphStore:
             "CREATE NODE TABLE IF NOT EXISTS Method("
             "id STRING, root_path STRING, name STRING, file_path STRING, "
             "language STRING, start_line INT64, end_line INT64, content STRING, "
-            "is_exported BOOLEAN, owner_name STRING, PRIMARY KEY(id))"
+            "is_exported BOOLEAN, owner_name STRING, scope_refs STRING, PRIMARY KEY(id))"
         )
+        # Migration: add scope_refs column to existing Method tables.
+        try:
+            self._conn.execute("MATCH (m:Method) RETURN m.scope_refs LIMIT 0")
+        except Exception:
+            try:
+                self._conn.execute("ALTER TABLE Method ADD scope_refs STRING DEFAULT ''")
+                logger.info("Migrated Method table: added 'scope_refs' column")
+            except Exception as migrate_exc:
+                logger.warning(
+                    "Could not migrate Method table (scope_refs column): %s. "
+                    "Run reset_db to get a clean schema.", migrate_exc
+                )
         self._conn.execute(
             "CREATE REL TABLE IF NOT EXISTS CodeRelation("
             "FROM File TO File, FROM File TO Function, FROM File TO Class, FROM File TO Method, "
@@ -221,6 +233,7 @@ class KuzuGraphStore:
                     "kind": kind,
                 })
             elif kind in ("method", "class_method"):
+                import json as _json
                 methods.append({
                     "id": node_id, "root_path": root_path,
                     "name": n.get("name", ""), "file_path": n.get("file_path", ""),
@@ -230,6 +243,7 @@ class KuzuGraphStore:
                     "content": str(n.get("content", "") or "")[:8000],
                     "is_exported": "true" if n.get("is_exported") else "false",
                     "owner_name": n.get("owner_name", ""),
+                    "scope_refs": _json.dumps(n.get("scope_refs") or []),
                 })
             # other kinds (module, hook, …) — not stored in DB
 
@@ -248,7 +262,7 @@ class KuzuGraphStore:
                  "start_line", "end_line", "content", "is_exported", "kind"])
             self._bulk_copy_nodes(tmp_dir, "Method", methods,
                 ["id", "root_path", "name", "file_path", "language",
-                 "start_line", "end_line", "content", "is_exported", "owner_name"])
+                 "start_line", "end_line", "content", "is_exported", "owner_name", "scope_refs"])
         logger.info(
             "[SAVE] Node bulk insert: %d files + %d functions + %d classes + %d methods in %.2fs",
             len(files), len(functions), len(classes), len(methods),

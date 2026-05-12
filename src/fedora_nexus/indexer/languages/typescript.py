@@ -129,9 +129,11 @@ class TypeScriptIndexer:
                 end_line = node.end_point[0] + 1
                 content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
                 sym_id = f"{rel}#function:{name}"
+                scope_refs = sorted(self._collect_type_refs(node))
                 graph.add_node(sym_id, language="typescript", kind="function",
                                name=name, file_path=rel, start_line=start_line,
-                               end_line=end_line, content=content, is_exported=is_exported)
+                               end_line=end_line, content=content, is_exported=is_exported,
+                               scope_refs=scope_refs)
                 graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 if top_level is not None and not class_stack:
                     top_level[name] = sym_id
@@ -167,10 +169,12 @@ class TypeScriptIndexer:
                 end_line = node.end_point[0] + 1
                 content = source.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8", errors="ignore")[:8000]
                 sym_id = f"{rel}#method:{class_stack[-1]}.{method_name}"
+                scope_refs = sorted(self._collect_type_refs(node))
                 graph.add_node(sym_id, language="typescript", kind="method",
                                name=method_name, file_path=rel, start_line=start_line,
                                end_line=end_line, content=content,
-                               is_exported=False, owner_name=class_stack[-1])
+                               is_exported=False, owner_name=class_stack[-1],
+                               scope_refs=scope_refs)
                 graph.add_edge(parent_id, sym_id, rel="CONTAINS")
             return
 
@@ -223,3 +227,73 @@ class TypeScriptIndexer:
                 graph.add_edge(caller_id, imported_symbols[called_name], rel="CALLS")
         for child in node.children:
             self._walk_for_calls(child, caller_id, imported_symbols, graph)
+
+    @staticmethod
+    def _collect_type_refs(node: Any) -> set[str]:
+        """Collect PascalCase type_identifier refs in a function/method body.
+
+        Captures class instantiations (new SomeService()), standalone type
+        references, and generic type arguments. Stops at nested class/function
+        declaration boundaries. Uses an explicit stack to avoid recursion depth
+        limits on deeply nested function bodies.
+        """
+        _STOP_TYPES = frozenset({"class_declaration", "function_declaration"})
+        refs: set[str] = set()
+        stack = list(node.children)  # skip the method/function node itself
+        while stack:
+            n = stack.pop()
+            if n.type in _STOP_TYPES:
+                continue
+            # type_identifier: type annotations / generic args (Foo in `x: Foo`, `Array<Foo>`)
+            # identifier:      value positions including `new Foo()` and `Foo.staticMethod()`
+            # Both are leaf-like in PascalCase contexts — stop descending after matching.
+            if n.type in ("type_identifier", "identifier"):
+                text = n.text.decode("utf-8").strip()
+                if text and text[0].isupper():
+                    refs.add(text)
+                continue  # leaf
+            stack.extend(n.children)
+        return refs
+
+    def resolve_cross_file_deps(
+        self,
+        rel: str,
+        graph: DependencyGraph,
+        file_symbols: dict[str, dict[str, str]],
+        sym_to_file: dict[str, str],
+    ) -> None:
+        """Emit cross-file DEPENDS_ON and CALLS edges for TypeScript/JavaScript.
+
+        TypeScript doesn't always have explicit imports for every class used
+        (re-exports, barrel files, type-only imports). This post-pass resolves
+        PascalCase type_identifier refs captured in method/function bodies:
+
+        - File → File DEPENDS_ON: when a method body references a class defined
+          in a different file that was resolved via sym_to_file.
+        - Method/Function → Class CALLS: cross-file call edge for the symbol pair.
+
+        Only refs that resolve via sym_to_file are emitted — external/framework
+        types (React, Promise, Error, …) are silently skipped.
+        """
+        all_syms: dict[str, str] = {}
+        for syms in file_symbols.values():
+            all_syms.update(syms)
+
+        for sym_id in list(graph.nodes()):
+            if not sym_id.startswith(rel + "#"):
+                continue
+            attrs = graph.node_attrs(sym_id)
+            if attrs.get("kind") not in ("method", "function"):
+                continue
+            scope_refs: list[str] = attrs.get("scope_refs") or []
+            for type_ref in scope_refs:
+                # File → File DEPENDS_ON
+                target_file = sym_to_file.get(type_ref)
+                if target_file and target_file != rel:
+                    if not graph.has_node(target_file):
+                        graph.add_node(target_file, language="typescript")
+                    graph.add_edge(rel, target_file)  # DiGraph ignores duplicates
+                # Method/Function → Class CALLS (cross-file only)
+                target_sym = all_syms.get(type_ref)
+                if target_sym and target_sym.split("#")[0] != rel:
+                    graph.add_edge(sym_id, target_sym, rel="CALLS")

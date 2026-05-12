@@ -1704,3 +1704,73 @@ def test_sql_indexer_detect_language():
     assert detect_language("db/structure.sql") == "sql"
     assert detect_language("schema.sql") == "sql"
 
+
+
+# ── TypeScript cross-file CALLS via scope_refs (new_expression) ──────────────
+
+def test_ts_collect_type_refs_from_new_expression(tmp_path):
+    """_collect_type_refs must capture PascalCase class names from new expressions."""
+    from fedora_nexus.indexer.languages.typescript import TypeScriptIndexer as _TSIndexer
+    inst = _TSIndexer()
+    # Smoke test: index a file that uses `new SomeService()` and check scope_refs on method node
+    (tmp_path / "repo.ts").write_text(
+        "export class UserRepo {\n"
+        "  find() { const s = new UserService(); return s; }\n"
+        "}\n"
+    )
+    (tmp_path / "service.ts").write_text(
+        "export class UserService { run() { return 1; } }\n"
+    )
+    graph = TreeSitterIndexer(languages=["typescript"]).index(str(tmp_path), symbol_mode=True)
+    nodes = {n["id"]: n for n in graph.to_adjacency_json()["nodes"]}
+    method_node = nodes.get("repo.ts#method:UserRepo.find")
+    assert method_node is not None, "method node for UserRepo.find not found"
+    assert "UserService" in (method_node.get("scope_refs") or []), \
+        f"Expected 'UserService' in scope_refs, got: {method_node.get('scope_refs')}"
+
+
+def test_ts_cross_file_calls_via_scope_refs(tmp_path):
+    """After indexing, a method that uses `new ForeignClass()` should have a cross-file CALLS edge."""
+    (tmp_path / "payment.ts").write_text(
+        "export class PaymentGateway {\n"
+        "  charge(amount: number) { return amount; }\n"
+        "}\n"
+    )
+    (tmp_path / "order.ts").write_text(
+        "import { PaymentGateway } from './payment';\n"
+        "export class OrderService {\n"
+        "  pay(amount: number) {\n"
+        "    const gw = new PaymentGateway();\n"
+        "    return gw.charge(amount);\n"
+        "  }\n"
+        "}\n"
+    )
+    graph = TreeSitterIndexer(languages=["typescript"]).index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    calls_edges = [e for e in adj["edges"] if e["rel"] == "CALLS"]
+    assert any(
+        "order.ts#method:OrderService.pay" == e["from"]
+        and "payment.ts#class:PaymentGateway" == e["to"]
+        for e in calls_edges
+    ), f"Expected cross-file CALLS edge, got: {calls_edges}"
+
+
+def test_ts_cross_file_depends_on_via_scope_refs(tmp_path):
+    """When a method references a class from another file, File→File DEPENDS_ON edge appears."""
+    (tmp_path / "logger.ts").write_text(
+        "export class Logger { log(msg: string) {} }\n"
+    )
+    (tmp_path / "app.ts").write_text(
+        "import { Logger } from './logger';\n"
+        "export class App {\n"
+        "  run() { const l = new Logger(); l.log('started'); }\n"
+        "}\n"
+    )
+    graph = TreeSitterIndexer(languages=["typescript"]).index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    dep_edges = [e for e in adj["edges"] if e.get("rel") in (None, "DEPENDS_ON", "CONTAINS")]
+    file_edges = [
+        e for e in adj["edges"]
+        if e["from"] == "app.ts" and e["to"] == "logger.ts"
+    ]
+    assert file_edges, f"Expected File→File DEPENDS_ON edge, got: {[e for e in adj['edges'] if e['from']=='app.ts']}"
