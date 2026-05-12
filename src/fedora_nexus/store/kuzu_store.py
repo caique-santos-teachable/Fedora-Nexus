@@ -121,8 +121,20 @@ class KuzuGraphStore:
             "CREATE NODE TABLE IF NOT EXISTS Class("
             "id STRING, root_path STRING, name STRING, file_path STRING, "
             "language STRING, start_line INT64, end_line INT64, content STRING, "
-            "is_exported BOOLEAN, PRIMARY KEY(id))"
+            "is_exported BOOLEAN, kind STRING, PRIMARY KEY(id))"
         )
+        # Migration: add kind column to existing Class tables that predate this schema version.
+        try:
+            self._conn.execute("MATCH (c:Class) RETURN c.kind LIMIT 0")
+        except Exception:
+            try:
+                self._conn.execute("ALTER TABLE Class ADD kind STRING DEFAULT ''")
+                logger.info("Migrated Class table: added 'kind' column")
+            except Exception as migrate_exc:
+                logger.warning(
+                    "Could not migrate Class table (kind column): %s. "
+                    "Run reset_db to get a clean schema.", migrate_exc
+                )
         self._conn.execute(
             "CREATE NODE TABLE IF NOT EXISTS Method("
             "id STRING, root_path STRING, name STRING, file_path STRING, "
@@ -206,6 +218,7 @@ class KuzuGraphStore:
                     "end_line": int(n.get("end_line", 0)),
                     "content": str(n.get("content", "") or "")[:8000],
                     "is_exported": "true" if n.get("is_exported") else "false",
+                    "kind": kind,
                 })
             elif kind in ("method", "class_method"):
                 methods.append({
@@ -232,7 +245,7 @@ class KuzuGraphStore:
                  "start_line", "end_line", "content", "is_exported"])
             self._bulk_copy_nodes(tmp_dir, "Class", classes,
                 ["id", "root_path", "name", "file_path", "language",
-                 "start_line", "end_line", "content", "is_exported"])
+                 "start_line", "end_line", "content", "is_exported", "kind"])
             self._bulk_copy_nodes(tmp_dir, "Method", methods,
                 ["id", "root_path", "name", "file_path", "language",
                  "start_line", "end_line", "content", "is_exported", "owner_name"])
@@ -512,22 +525,24 @@ class KuzuGraphStore:
             return res.get_next()[0]
         return None
 
-    # Maps kind name -> (FTS table, kind label) for search filtering.
-    _FTS_TABLES: list[tuple[str, str]] = [
-        ("Function", "function"),
-        ("Class", "class"),
-        ("Method", "method"),
-        ("File", "file"),
+    # Maps kind name -> (FTS table, fallback_kind, kind_where) for search filtering.
+    # kind_where: if not None, post-filter FTS results to nodes where node.kind == kind_where.
+    # This is needed because Class table stores class/module/concern/db_table together.
+    _FTS_TABLES: list[tuple[str, str, str | None]] = [
+        ("Function", "function", None),
+        ("Class",    "class",    None),
+        ("Method",   "method",   None),
+        ("File",     "file",     None),
     ]
-    _KIND_TO_FTS_TABLE: dict[str, tuple[str, str]] = {
-        "function":    ("Function", "function"),
-        "class":       ("Class",    "class"),
-        "module":      ("Class",    "class"),      # Ruby modules in Class table
-        "concern":     ("Class",    "class"),      # Rails concerns in Class table
-        "db_table":    ("Class",    "db_table"),   # SQL schema tables in Class table
-        "method":      ("Method",   "method"),
-        "class_method": ("Method",  "method"),  # Ruby class methods stored in Method table
-        "file":        ("File",     "file"),
+    _KIND_TO_FTS_TABLE: dict[str, tuple[str, str, str | None]] = {
+        "function":    ("Function", "function", None),
+        "class":       ("Class",    "class",    None),
+        "module":      ("Class",    "module",   "module"),      # filter to module nodes
+        "concern":     ("Class",    "concern",  "concern"),     # filter to concern nodes
+        "db_table":    ("Class",    "db_table", "db_table"),    # filter to db_table nodes
+        "method":      ("Method",   "method",   None),
+        "class_method": ("Method",  "method",   None),  # Ruby class methods stored in Method table
+        "file":        ("File",     "file",     None),
     }
 
     def search(self, root_path: str, query: str, limit: int = 20, kind: str | None = None) -> list[dict]:
@@ -546,7 +561,7 @@ class KuzuGraphStore:
             [self._KIND_TO_FTS_TABLE[kind_filter]] if kind_filter and kind_filter in self._KIND_TO_FTS_TABLE
             else self._FTS_TABLES
         )
-        for table, kind in fts_tables:
+        for table, fallback_kind, kind_where in fts_tables:
             try:
                 cypher = (
                     f"CALL QUERY_FTS_INDEX('{table}', '{table.lower()}_fts', '{escaped}', "
@@ -559,11 +574,17 @@ class KuzuGraphStore:
                     node, score = row[0], row[1]
                     if node.get("root_path", "") != root_path:
                         continue
+                    # Use the stored kind column if available (Class table has it);
+                    # fall back to the FTS table's fallback_kind for other tables.
+                    actual_kind = node.get("kind") or fallback_kind
+                    # Post-filter: when kind_where is set, skip nodes of a different kind.
+                    if kind_where and actual_kind != kind_where:
+                        continue
                     bm25_results.append({
                         "id": node.get("id", ""),
                         "name": node.get("name", ""),
                         "file_path": node.get("file_path", ""),
-                        "kind": kind,
+                        "kind": actual_kind,
                         "start_line": node.get("start_line", 0),
                         "end_line": node.get("end_line", 0),
                         "score": float(score),
@@ -603,7 +624,7 @@ class KuzuGraphStore:
         semantic_only_ids = [sid for sid, _ in fused[:limit] if sid not in meta]
         if semantic_only_ids:
             for sid in semantic_only_ids:
-                for table, kind in [("Function", "function"), ("Class", "class"), ("Method", "method"), ("File", "file")]:
+                for table, fallback_kind, _ in [("Function", "function", None), ("Class", "class", None), ("Method", "method", None), ("File", "file", None)]:
                     try:
                         res = self._conn.execute(
                             f"MATCH (n:{table} {{id: $id}}) RETURN n",
@@ -611,11 +632,12 @@ class KuzuGraphStore:
                         )
                         if res.has_next():
                             n = res.get_next()[0]
+                            actual_kind = n.get("kind") or fallback_kind
                             meta[sid] = {
                                 "id": sid,
                                 "name": n.get("name", ""),
                                 "file_path": n.get("file_path", ""),
-                                "kind": kind,
+                                "kind": actual_kind,
                                 "start_line": n.get("start_line", 0),
                                 "end_line": n.get("end_line", 0),
                                 "score": 0.0,

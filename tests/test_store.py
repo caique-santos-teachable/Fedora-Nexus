@@ -451,3 +451,126 @@ def test_search_returns_function_by_name(tmp_path):
     names = [r["name"] for r in results]
     assert "authenticate" in names
     assert results[0]["rank"] == 1
+
+
+# ------------------------------------------------------------------
+# Class node kind column — guardrail tests
+# ------------------------------------------------------------------
+
+def test_class_node_persists_kind_class(tmp_path):
+    """Class nodes must store their 'kind' = 'class' in the Kuzu Class table."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    g.add_node("src/user.rb", language="ruby", kind="file", name="user.rb", content="")
+    g.add_node("src/user.rb#class:User", language="ruby", kind="class", name="User",
+               file_path="src/user.rb", content="class User; end", start_line=1, end_line=3)
+    root = "/tmp/kind_class_test"
+    store.save_graph(root, g)
+
+    raw = store._conn.execute("MATCH (c:Class {name: 'User'}) RETURN c.kind")
+    assert raw.has_next()
+    assert raw.get_next()[0] == "class"
+    store.delete_repo(root)
+
+
+def test_module_node_persists_kind_module(tmp_path):
+    """Module nodes must store their 'kind' = 'module' in the Kuzu Class table."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    g.add_node("app/concerns/auditable.rb", language="ruby", kind="file",
+               name="auditable.rb", content="")
+    g.add_node("app/concerns/auditable.rb#module:Auditable", language="ruby",
+               kind="module", name="Auditable", file_path="app/concerns/auditable.rb",
+               content="module Auditable; end", start_line=1, end_line=3)
+    root = "/tmp/kind_module_test"
+    store.save_graph(root, g)
+
+    raw = store._conn.execute("MATCH (c:Class {name: 'Auditable'}) RETURN c.kind")
+    assert raw.has_next()
+    assert raw.get_next()[0] == "module"
+    store.delete_repo(root)
+
+
+def test_db_table_node_persists_kind_db_table(tmp_path):
+    """SQL db_table nodes must store their 'kind' = 'db_table' in the Kuzu Class table."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    g.add_node("db/structure.sql", language="sql", kind="file",
+               name="structure.sql", content="")
+    g.add_node("db/structure.sql#db_table:users", language="sql",
+               kind="db_table", name="users", file_path="db/structure.sql",
+               content="id bigint, email varchar", start_line=1, end_line=5)
+    root = "/tmp/kind_db_table_test"
+    store.save_graph(root, g)
+
+    raw = store._conn.execute("MATCH (c:Class {name: 'users'}) RETURN c.kind")
+    assert raw.has_next()
+    assert raw.get_next()[0] == "db_table"
+    store.delete_repo(root)
+
+
+def test_cypher_where_kind_db_table_returns_only_sql_tables(tmp_path):
+    """WHERE c.kind = 'db_table' must not raise Binder exception and must filter correctly."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    g.add_node("app/models/course.rb", language="ruby", kind="file",
+               name="course.rb", content="")
+    g.add_node("app/models/course.rb#class:Course", language="ruby",
+               kind="class", name="Course", file_path="app/models/course.rb",
+               content="class Course; end", start_line=1, end_line=3)
+    g.add_node("db/structure.sql", language="sql", kind="file",
+               name="structure.sql", content="")
+    g.add_node("db/structure.sql#db_table:courses", language="sql",
+               kind="db_table", name="courses", file_path="db/structure.sql",
+               content="id bigint, title varchar", start_line=1, end_line=4)
+    root = "/tmp/kind_cypher_filter_test"
+    store.save_graph(root, g)
+
+    raw = store._conn.execute("MATCH (c:Class) WHERE c.kind = 'db_table' RETURN c.name")
+    names = []
+    while raw.has_next():
+        names.append(raw.get_next()[0])
+    assert "courses" in names
+    assert "Course" not in names
+    store.delete_repo(root)
+
+
+def test_fts_kind_db_table_returns_only_sql_tables_not_ruby_classes(tmp_path):
+    """FTS search with kind='db_table' must NOT return Ruby class/module nodes."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    # Ruby class with 'accounts' in content
+    g.add_node("app/models/account.rb", language="ruby", kind="file",
+               name="account.rb", content="")
+    g.add_node("app/models/account.rb#class:Account", language="ruby",
+               kind="class", name="Account", file_path="app/models/account.rb",
+               content="class Account; belongs_to :accounts; end",
+               start_line=1, end_line=3)
+    # SQL table also named 'accounts'
+    g.add_node("db/structure.sql", language="sql", kind="file",
+               name="structure.sql", content="")
+    g.add_node("db/structure.sql#db_table:accounts", language="sql",
+               kind="db_table", name="accounts", file_path="db/structure.sql",
+               content="id bigint, name varchar", start_line=1, end_line=4)
+    root = "/tmp/fts_kind_filter_test"
+    store.save_graph(root, g)
+
+    results = store.search(root, "accounts", kind="db_table")
+    kinds = {r["kind"] for r in results}
+    # Must only contain db_table results — no 'class' results
+    assert "db_table" in kinds
+    assert "class" not in kinds
+    store.delete_repo(root)
+
+
+def test_kind_column_migration_idempotent(tmp_path):
+    """init_schema() must not raise if kind column already exists in Class table."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    # Calling init_schema() again must not raise even though kind already exists
+    store.init_schema()  # should be a no-op (IF NOT EXISTS + migration probe)

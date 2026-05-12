@@ -1415,6 +1415,162 @@ def test_ruby_module_node_present_in_graph(tmp_path):
     assert attrs["name"] == "Publishable"
 
 
+# ── Ruby scope_refs: constant refs in method bodies ───────────────────────────
+
+def test_ruby_collect_const_refs_scope_resolution(tmp_path):
+    """Method body with Namespace::ClassName.call must produce scope_refs=['Namespace::ClassName']."""
+    (tmp_path / "handler.rb").write_text(
+        "class Handler\n"
+        "  def process\n"
+        "    Transactions::Refund.new(amount: 100).call\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    method_sym = "handler.rb#method:Handler.process"
+    assert graph.has_node(method_sym), "method node must exist"
+    attrs = graph.node_attrs(method_sym)
+    scope_refs = attrs.get("scope_refs", [])
+    assert "Transactions::Refund" in scope_refs, (
+        f"Expected 'Transactions::Refund' in scope_refs; got {scope_refs}"
+    )
+
+
+def test_ruby_collect_const_refs_standalone_constant(tmp_path):
+    """Method body with User.find must produce scope_refs containing 'User'."""
+    (tmp_path / "action.rb").write_text(
+        "class Action\n"
+        "  def run\n"
+        "    user = User.find(params[:id])\n"
+        "    user\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    method_sym = "action.rb#method:Action.run"
+    assert graph.has_node(method_sym)
+    scope_refs = graph.node_attrs(method_sym).get("scope_refs", [])
+    assert "User" in scope_refs, f"Expected 'User' in scope_refs; got {scope_refs}"
+
+
+def test_ruby_collect_const_refs_skips_nested_class(tmp_path):
+    """Constants inside a nested class definition must NOT appear in method scope_refs."""
+    (tmp_path / "outer.rb").write_text(
+        "class Outer\n"
+        "  def setup\n"
+        "    # no constant references here\n"
+        "  end\n"
+        "  class Inner\n"  # nested class — not part of method body
+        "    SOME_CONST = 1\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    method_sym = "outer.rb#method:Outer.setup"
+    assert graph.has_node(method_sym)
+    scope_refs = graph.node_attrs(method_sym).get("scope_refs", [])
+    assert "Inner" not in scope_refs, (
+        f"Nested class name must not appear in parent method's scope_refs; got {scope_refs}"
+    )
+
+
+def test_ruby_scope_refs_generates_file_depends_on(tmp_path):
+    """A method referencing Transactions::Refund must generate File→File DEPENDS_ON to refund.rb."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "refund.rb").write_text(
+        "module Transactions\n"
+        "  class Refund\n"
+        "    def call; end\n"
+        "  end\n"
+        "end\n"
+    )
+    (tmp_path / "app" / "handler.rb").write_text(
+        "class Handler\n"
+        "  def process\n"
+        "    Transactions::Refund.new.call\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    deps = graph.get_dependencies("app/handler.rb")
+    assert "app/refund.rb" in deps, (
+        f"Expected DEPENDS_ON handler.rb → refund.rb via scope_refs; got {deps}"
+    )
+
+
+def test_ruby_scope_refs_generates_method_calls_class(tmp_path):
+    """Method referencing Transactions::Refund must emit a Method→Class CALLS edge (cross-file)."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "refund.rb").write_text(
+        "module Transactions\n"
+        "  class Refund\n"
+        "    def call; end\n"
+        "  end\n"
+        "end\n"
+    )
+    (tmp_path / "app" / "handler.rb").write_text(
+        "class Handler\n"
+        "  def process\n"
+        "    Transactions::Refund.new.call\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    handler_method = "app/handler.rb#method:Handler.process"
+    refund_class = "app/refund.rb#class:Transactions::Refund"
+    adj = graph.to_adjacency_json()
+    calls_edges = [
+        e for e in adj["edges"]
+        if e["from"] == handler_method and e.get("rel") == "CALLS"
+    ]
+    assert any(e["to"] == refund_class for e in calls_edges), (
+        f"Expected CALLS {handler_method} → {refund_class}; got {calls_edges}"
+    )
+
+
+def test_ruby_scope_refs_no_dep_for_unknown_const(tmp_path):
+    """Constants not defined in the repo (Rails, I18n, Time) must NOT generate deps."""
+    (tmp_path / "service.rb").write_text(
+        "class Service\n"
+        "  def run\n"
+        "    Rails.logger.info('hello')\n"
+        "    I18n.t('key')\n"
+        "    Time.current\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    # Only service.rb itself; no external file deps
+    file_deps = [d for d in graph.get_dependencies("service.rb") if not d.startswith("service.rb#")]
+    assert file_deps == [], (
+        f"Framework constants must not produce file deps; got {file_deps}"
+    )
+
+
+def test_ruby_scope_refs_get_dependents_returns_caller_file(tmp_path):
+    """After indexing, get_dependents(refund.rb) must return handler.rb (was 0 before this fix)."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "refund.rb").write_text(
+        "module Transactions\n"
+        "  class Refund\n"
+        "    def call; end\n"
+        "  end\n"
+        "end\n"
+    )
+    (tmp_path / "app" / "handler.rb").write_text(
+        "class Handler\n"
+        "  def process\n"
+        "    Transactions::Refund.new.call\n"
+        "  end\n"
+        "end\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    dependents = graph.get_dependents("app/refund.rb")
+    assert "app/handler.rb" in dependents, (
+        f"get_dependents(refund.rb) must include handler.rb; got {dependents}"
+    )
+
+
 # ── SqlIndexer ────────────────────────────────────────────────────────────────
 
 _PG_STRUCTURE = """\

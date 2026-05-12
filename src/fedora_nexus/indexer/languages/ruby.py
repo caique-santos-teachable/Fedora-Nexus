@@ -186,6 +186,19 @@ class RubyIndexer:
             # 7. constant assignments that reference known constants on RHS
             # (Would require deeper AST analysis — deferred)
 
+            # 8. Constant references inside method bodies
+            #    scope_refs is collected during _walk_symbols by _collect_const_refs.
+            #    Only refs that resolve via sym_to_file are emitted — framework constants
+            #    (Rails, I18n, Time, …) are silently skipped.
+            elif kind in ("method", "class_method"):
+                scope_refs: list[str] = attrs.get("scope_refs") or []
+                for const_ref in scope_refs:
+                    self._emit_dep(rel, const_ref, sym_to_file, graph)
+                    # Method → Class CALLS (cross-file only)
+                    target_sym = all_syms.get(const_ref)
+                    if target_sym and target_sym.split("#")[0] != rel:
+                        graph.add_edge(sym_id, target_sym, rel="CALLS")
+
     @staticmethod
     def _enclosing_class(sym_id: str, graph: DependencyGraph) -> str | None:
         """Return the class or module sym_id that CONTAINS this symbol, if any.
@@ -224,6 +237,40 @@ class RubyIndexer:
             last = last[:-1]
         parts[-1] = last
         return "".join(p.capitalize() for p in parts)
+
+    @staticmethod
+    @staticmethod
+    def _collect_const_refs(node: Any) -> set[str]:
+        """Collect PascalCase constant references in an AST subtree (method body).
+
+        Returns full scope_resolution texts (e.g. 'Transactions::Refund') and
+        standalone PascalCase constants (e.g. 'User'). Constituent constants of
+        a scope_resolution are NOT returned separately to avoid duplicates.
+        Does NOT recurse into nested class/module definitions — those have their
+        own scope and are handled by the class-level post-passes.
+
+        Uses an explicit stack (no recursion) to avoid hitting Python's call
+        stack limit on deeply nested method bodies.
+        """
+        _STOP_TYPES = frozenset({"class", "module", "singleton_class"})
+        refs: set[str] = set()
+        stack = list(node.children)  # skip the method node itself; walk its children
+        while stack:
+            n = stack.pop()
+            if n.type in _STOP_TYPES:
+                continue
+            if n.type == "scope_resolution":
+                text = n.text.decode("utf-8").strip()
+                if text:
+                    refs.add(text)
+                continue  # skip children — full text already captured
+            if n.type == "constant":
+                text = n.text.decode("utf-8").strip()
+                if text and text[0].isupper():
+                    refs.add(text)
+                continue  # leaf node
+            stack.extend(n.children)
+        return refs
 
     @staticmethod
     def _emit_dep(
@@ -442,10 +489,15 @@ class RubyIndexer:
                 owner_name = prefix
                 kind = "class_method" if _in_singleton_class else "method"
                 sym_id = f"{rel}#method:{qualified}"
+                # Collect PascalCase constant refs from the method body so that
+                # the cross-file post-pass can emit File→File DEPENDS_ON and
+                # Method→Class CALLS without requiring explicit require statements.
+                scope_refs = sorted(self._collect_const_refs(node))
                 graph.add_node(sym_id, language="ruby", kind=kind,
                                name=method_name, file_path=rel, start_line=start_line,
                                end_line=end_line, content=content,
-                               is_exported=False, owner_name=owner_name)
+                               is_exported=False, owner_name=owner_name,
+                               scope_refs=scope_refs)
                 graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 if top_level is not None and len(scope_stack) == 1:
                     top_level[qualified] = sym_id
@@ -463,10 +515,12 @@ class RubyIndexer:
                 # owner_name carries the full qualified scope (FQCN) for predictable Cypher queries
                 owner_name = prefix
                 sym_id = f"{rel}#method:{qualified}"
+                scope_refs = sorted(self._collect_const_refs(node))
                 graph.add_node(sym_id, language="ruby", kind="class_method",
                                name=method_name, file_path=rel, start_line=start_line,
                                end_line=end_line, content=content,
-                               is_exported=False, owner_name=owner_name)
+                               is_exported=False, owner_name=owner_name,
+                               scope_refs=scope_refs)
                 graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 if top_level is not None and len(scope_stack) == 1:
                     top_level[qualified] = sym_id

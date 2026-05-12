@@ -220,7 +220,7 @@ async def list_tools() -> list[Tool]:
                 "OPTIONAL MATCH, UNION ALL, ORDER BY, LIMIT, SKIP, IN [...], "
                 "collect(), count(), and property predicates (CONTAINS, STARTS WITH, ENDS WITH, =). "
                 "Read-only: CREATE/DELETE/SET/MERGE/DROP/ALTER are blocked. "
-                "Node tables: File, Class (also stores modules, concerns, db_tables — filter with kind='db_table'), "
+                "Node tables: File, Class (stores class/module/concern/db_table — discriminate with WHERE c.kind IN ['class','module','concern','db_table']), "
                 "Function, Method. "
                 "Relationship: CodeRelation with type DEPENDS_ON | CONTAINS | CALLS | INHERITS. "
                 "All node IDs are prefixed with root_path:: — use file_path or name for human-readable filters. "
