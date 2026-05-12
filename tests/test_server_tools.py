@@ -275,7 +275,6 @@ def test_symbols_for_embed_have_no_root_path_prefix():
 
     with patch("fedora_nexus.store.kuzu_store._emb.build_index", side_effect=fake_build_index), \
          patch.object(KuzuGraphStore, "_ensure_schema"), \
-         patch.object(KuzuGraphStore, "_fts_healthy", return_value=True), \
          patch.object(KuzuGraphStore, "_delete_repo_data"), \
          patch.object(KuzuGraphStore, "_bulk_copy_nodes"):
         store = KuzuGraphStore.__new__(KuzuGraphStore)
@@ -313,7 +312,6 @@ def test_file_nodes_included_in_embed_symbols():
 
     with patch("fedora_nexus.store.kuzu_store._emb.build_index", side_effect=fake_build_index), \
          patch.object(KuzuGraphStore, "_ensure_schema"), \
-         patch.object(KuzuGraphStore, "_fts_healthy", return_value=True), \
          patch.object(KuzuGraphStore, "_delete_repo_data"), \
          patch.object(KuzuGraphStore, "_bulk_copy_nodes"):
         store = KuzuGraphStore.__new__(KuzuGraphStore)

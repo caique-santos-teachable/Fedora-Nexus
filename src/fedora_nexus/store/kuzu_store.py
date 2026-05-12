@@ -191,15 +191,6 @@ class KuzuGraphStore:
     def save_graph(self, root_path: str, graph: DependencyGraph) -> None:
         """Persist a graph, replacing any previous data for this repo."""
         self._ensure_schema()
-        # Detect and repair orphaned FTS backing tables before touching any data.
-        # Kuzu leaves orphaned internal tables when a container is killed mid-index;
-        # DROP_FTS_INDEX removes the catalog entry but the physical tables remain.
-        if not self._fts_healthy():
-            logger.warning(
-                "[FTS] Orphaned FTS backing tables detected — resetting DB to repair. "
-                "All existing index data will be re-indexed."
-            )
-            self._reset_db_and_reconnect()
         data = graph.to_adjacency_json()
         self._delete_repo_data(root_path)
         indexed_at = datetime.now(tz=timezone.utc).isoformat()
@@ -372,7 +363,12 @@ class KuzuGraphStore:
                         f"CALL CREATE_FTS_INDEX('{table}', '{idx}', ['name', 'file_path', 'content'])"
                     )
                 except Exception as exc:
-                    logger.warning("FTS index creation failed for %s: %s", table, exc)
+                    logger.warning(
+                        "[FTS] FTS index creation failed for %s (likely orphaned backing "
+                        "tables from a previous interrupted run). Call reset_db to restore "
+                        "full-text search. Error: %s",
+                        table, exc,
+                    )
 
         # ── Embedding index (background thread) ───────────────────────────────
         symbols_for_embed = []
@@ -745,89 +741,6 @@ class KuzuGraphStore:
     def _ensure_schema(self) -> None:
         """Idempotently create tables; safe to call multiple times."""
         self.init_schema()
-
-    def _fts_healthy(self) -> bool:
-        """Return True if FTS index creation is expected to work on this DB.
-
-        Kuzu can be left with orphaned physical FTS backing tables when a
-        process is killed mid-index.  Those tables exist on disk but not in
-        the catalog, so DROP TABLE cannot see them and CREATE_FTS_INDEX fails.
-
-        Probe logic (against the real File/file_fts tables):
-          1. Try DROP (succeeds if index exists; silently ignored if it doesn't).
-          2. Insert a sentinel row and try CREATE.
-          3. On success → clean up and return True.
-          4. On failure → orphaned backing tables confirmed → return False.
-        """
-        try:
-            # Step 1: drop any existing FTS index from a previous run.
-            # This is safe to ignore if the index doesn't exist yet.
-            try:
-                self._conn.execute("CALL DROP_FTS_INDEX('File', 'file_fts')")
-            except Exception:
-                pass  # first run or already dropped — not an error
-
-            # Step 2: insert a sentinel row so FTS has data to process.
-            self._conn.execute(
-                "CREATE (:File {id: '_fts_probe_', root_path: '_', name: 'probe', "
-                "file_path: '_', language: '_', content: 'probe'})"
-            )
-            # Step 3: try creating the index — fails iff orphaned backing tables exist.
-            self._conn.execute(
-                "CALL CREATE_FTS_INDEX('File', 'file_fts', ['name', 'content'])"
-            )
-            # Healthy — clean up sentinel and index so save_graph starts fresh.
-            self._conn.execute("CALL DROP_FTS_INDEX('File', 'file_fts')")
-            self._conn.execute(
-                "MATCH (n:File {id: '_fts_probe_'}) DETACH DELETE n"
-            )
-            return True
-        except Exception:
-            try:
-                self._conn.execute(
-                    "MATCH (n:File {id: '_fts_probe_'}) DETACH DELETE n"
-                )
-            except Exception:
-                pass
-            return False
-
-    def _reset_db_and_reconnect(self) -> None:
-        """Repair an unrecoverable FTS state by opening a fresh Kuzu DB.
-
-        ``shutil.rmtree`` can silently fail on Linux when the old Kuzu C++
-        objects still hold file descriptors to the DB directory.  We instead
-        use ``os.rename`` which is atomic and works even with open FDs — the
-        old directory is moved aside, and a brand-new DB is opened at the
-        original path.
-        """
-        import gc
-        # Release Python references so CPython can run Kuzu's C++ __del__.
-        self._conn = None
-        self._db = None
-        gc.collect()
-
-        corrupted_path = self._db_path + ".corrupted"
-        import shutil as _shutil
-        _shutil.rmtree(corrupted_path, ignore_errors=True)
-        try:
-            os.rename(self._db_path, corrupted_path)
-            logger.warning("[FTS] DB moved to %s — opening fresh DB.", corrupted_path)
-        except Exception as rename_exc:
-            logger.warning("[FTS] Could not move DB (%s) — attempting rmtree.", rename_exc)
-            _shutil.rmtree(self._db_path, ignore_errors=True)
-
-        self._db = kuzu.Database(self._db_path)
-        self._conn = kuzu.Connection(self._db)
-        self._embedding_cache = {}
-        self.init_schema()
-
-        # Clean up the corrupted backup in a daemon thread (old file handles
-        # may still be open; the OS will release them shortly).
-        def _drop_backup() -> None:
-            import time as _time
-            _time.sleep(5)
-            _shutil.rmtree(corrupted_path, ignore_errors=True)
-        threading.Thread(target=_drop_backup, daemon=True, name="db-cleanup").start()
 
     def _delete_repo_data(self, root_path: str) -> None:
         """Remove all nodes (and their attached edges) for a repo via DETACH DELETE."""
