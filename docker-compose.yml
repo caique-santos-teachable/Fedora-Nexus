@@ -11,6 +11,7 @@ services:
       FASTEMBED_CACHE_PATH: /app/.cache/fastembed
     volumes:
       - fedora-nexus-data:/data
+      - ${HOST_REPOS_PREFIX:-/tmp}:${CONTAINER_REPOS_PATH:-/repos}:ro
     # stdin_open + tty: false so it works with stdio MCP transport
     stdin_open: true
     tty: false
@@ -31,6 +32,7 @@ services:
       FASTEMBED_CACHE_PATH: /app/.cache/fastembed
     volumes:
       - fedora-nexus-data:/data
+      - ${HOST_REPOS_PREFIX:-/tmp}:${CONTAINER_REPOS_PATH:-/repos}:ro
     ports:
       - "7832:7832"
     restart: unless-stopped
@@ -38,3 +40,4 @@ services:
 
 volumes:
   fedora-nexus-data:
+    name: fedora-nexus-data
