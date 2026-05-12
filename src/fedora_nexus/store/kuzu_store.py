@@ -151,7 +151,8 @@ class KuzuGraphStore:
             "CREATE NODE TABLE IF NOT EXISTS Method("
             "id STRING, root_path STRING, name STRING, file_path STRING, "
             "language STRING, start_line INT64, end_line INT64, content STRING, "
-            "is_exported BOOLEAN, owner_name STRING, scope_refs STRING, PRIMARY KEY(id))"
+            "is_exported BOOLEAN, owner_name STRING, scope_refs STRING, "
+            "kind STRING, dsl_macro STRING, PRIMARY KEY(id))"
         )
         # Migration: add scope_refs column to existing Method tables.
         try:
@@ -175,6 +176,18 @@ class KuzuGraphStore:
             except Exception as migrate_exc:
                 logger.warning(
                     "Could not migrate Method table (kind column): %s. "
+                    "Run reset_db to get a clean schema.", migrate_exc
+                )
+        # Migration: add macro column (the DSL macro name, e.g. 'has_many', 'before_action').
+        try:
+            self._conn.execute("MATCH (m:Method) RETURN m.dsl_macro LIMIT 0")
+        except Exception:
+            try:
+                self._conn.execute("ALTER TABLE Method ADD dsl_macro STRING DEFAULT ''")
+                logger.info("Migrated Method table: added 'dsl_macro' column")
+            except Exception as migrate_exc:
+                logger.warning(
+                    "Could not migrate Method table (macro column): %s. "
                     "Run reset_db to get a clean schema.", migrate_exc
                 )
         self._conn.execute(
@@ -260,6 +273,7 @@ class KuzuGraphStore:
                     "owner_name": n.get("owner_name", ""),
                     "scope_refs": _json.dumps(n.get("scope_refs") or []),
                     "kind": kind,
+                    "dsl_macro": "",
                 })
             elif kind in (
                 "association", "hook", "scope", "validation",
@@ -280,6 +294,7 @@ class KuzuGraphStore:
                     "owner_name": "",
                     "scope_refs": "[]",
                     "kind": kind,
+                    "dsl_macro": str(n.get("macro", "") or ""),
                 })
 
         # ── Bulk node inserts via COPY FROM CSV ───────────────────────────────
@@ -297,7 +312,7 @@ class KuzuGraphStore:
                  "start_line", "end_line", "content", "is_exported", "kind"])
             self._bulk_copy_nodes(tmp_dir, "Method", methods,
                 ["id", "root_path", "name", "file_path", "language",
-                 "start_line", "end_line", "content", "is_exported", "owner_name", "scope_refs", "kind"])
+                 "start_line", "end_line", "content", "is_exported", "owner_name", "scope_refs", "kind", "dsl_macro"])
         logger.info(
             "[SAVE] Node bulk insert: %d files + %d functions + %d classes + %d methods in %.2fs",
             len(files), len(functions), len(classes), len(methods),

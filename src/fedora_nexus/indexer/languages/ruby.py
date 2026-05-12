@@ -569,7 +569,8 @@ class RubyIndexer:
                 sym_id = f"{rel}#hook:{macro}:{callback_name}"
                 if not graph.has_node(sym_id):
                     graph.add_node(sym_id, language="ruby", kind="hook",
-                                   name=f"{macro}:{callback_name}", file_path=rel,
+                                   name=f"{macro}:{callback_name}", macro=macro,
+                                   file_path=rel,
                                    start_line=start_line, content=content)
                     graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 return

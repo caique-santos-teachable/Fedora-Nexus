@@ -715,3 +715,89 @@ def test_method_kind_column_preserved_for_regular_methods(tmp_path):
     assert res.get_next()[0] == "method"
     store.delete_repo(root)
 
+
+def test_dsl_macro_column_persisted_for_associations(tmp_path):
+    """Association nodes must have macro='has_many' (or belongs_to etc.) in the macro column.
+
+    Regression: 'macro' was captured in-memory but had no Kuzu column — queries
+    like WHERE m.dsl_macro = 'has_many' would always return 0.
+    """
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    root = "/tmp/test_macro_col"
+    g.add_node("app/models/course.rb", language="ruby", kind="file",
+               name="course.rb", content="")
+    g.add_node("app/models/course.rb#association:has_many:enrollments",
+               language="ruby", kind="association",
+               name="enrollments", macro="has_many",
+               file_path="app/models/course.rb", start_line=3,
+               content="has_many :enrollments")
+    g.add_node("app/models/course.rb#association:belongs_to:school",
+               language="ruby", kind="association",
+               name="school", macro="belongs_to",
+               file_path="app/models/course.rb", start_line=4,
+               content="belongs_to :school")
+    g.add_edge("app/models/course.rb",
+               "app/models/course.rb#association:has_many:enrollments", rel="CONTAINS")
+    g.add_edge("app/models/course.rb",
+               "app/models/course.rb#association:belongs_to:school", rel="CONTAINS")
+    store.save_graph(root, g)
+
+    res = store._conn.execute(
+        "MATCH (m:Method {root_path: $rp}) WHERE m.dsl_macro = 'has_many' RETURN m.name",
+        {"rp": root},
+    )
+    assert res.has_next(), "WHERE m.dsl_macro = 'has_many' returned no rows"
+    assert res.get_next()[0] == "enrollments"
+
+    res2 = store._conn.execute(
+        "MATCH (m:Method {root_path: $rp}) WHERE m.dsl_macro = 'belongs_to' RETURN m.name",
+        {"rp": root},
+    )
+    assert res2.has_next(), "WHERE m.dsl_macro = 'belongs_to' returned no rows"
+    assert res2.get_next()[0] == "school"
+    store.delete_repo(root)
+
+
+def test_dsl_macro_column_persisted_for_hooks(tmp_path):
+    """Hook nodes must have macro='before_action' etc. in the macro column."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    root = "/tmp/test_hook_macro"
+    g.add_node("app/controllers/courses_controller.rb", language="ruby", kind="file",
+               name="courses_controller.rb", content="")
+    g.add_node("app/controllers/courses_controller.rb#hook:before_action:auth",
+               language="ruby", kind="hook",
+               name="before_action:auth", macro="before_action",
+               file_path="app/controllers/courses_controller.rb",
+               start_line=2, content="before_action :auth")
+    g.add_node("app/controllers/courses_controller.rb#hook:around_action:memo",
+               language="ruby", kind="hook",
+               name="around_action:memo", macro="around_action",
+               file_path="app/controllers/courses_controller.rb",
+               start_line=3, content="around_action :memo")
+    g.add_edge("app/controllers/courses_controller.rb",
+               "app/controllers/courses_controller.rb#hook:before_action:auth",
+               rel="CONTAINS")
+    g.add_edge("app/controllers/courses_controller.rb",
+               "app/controllers/courses_controller.rb#hook:around_action:memo",
+               rel="CONTAINS")
+    store.save_graph(root, g)
+
+    res = store._conn.execute(
+        "MATCH (m:Method {root_path: $rp}) WHERE m.dsl_macro = 'before_action' RETURN m.name",
+        {"rp": root},
+    )
+    assert res.has_next(), "WHERE m.dsl_macro = 'before_action' returned no rows"
+    assert "before_action:auth" in res.get_next()[0]
+
+    res2 = store._conn.execute(
+        "MATCH (m:Method {root_path: $rp}) WHERE m.dsl_macro = 'around_action' RETURN count(*) as n",
+        {"rp": root},
+    )
+    assert res2.has_next()
+    assert res2.get_next()[0] == 1
+    store.delete_repo(root)
+
