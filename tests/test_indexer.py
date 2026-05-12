@@ -1266,6 +1266,55 @@ def test_ruby_instance_method_owner_name_is_fqcn(tmp_path):
 
 # ── Ruby cross-file DEPENDS_ON post-pass ─────────────────────────────────────
 
+def test_ruby_superclass_generates_inherits_edge(tmp_path):
+    """class Course < ApplicationRecord must produce Class→Class INHERITS edge.
+
+    Regression: resolve_cross_file_deps was emitting DEPENDS_ON on the same
+    (from, to) pair after resolve_inheritance emitted INHERITS, silently
+    overwriting it (NetworkX DiGraph only stores one edge per pair).
+    """
+    (tmp_path / "application_record.rb").write_text(
+        "class ApplicationRecord < ActiveRecord::Base\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course < ApplicationRecord\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    adj = graph.to_adjacency_json()
+    inherits_edges = [
+        e for e in adj["edges"]
+        if e.get("rel") == "INHERITS"
+        and "class:Course" in e["from"]
+        and "class:ApplicationRecord" in e["to"]
+    ]
+    assert inherits_edges, (
+        f"Expected Class→Class INHERITS edge; got all edges from course sym: "
+        f"{[e for e in adj['edges'] if 'Course' in e['from']]}"
+    )
+
+
+def test_ruby_inherits_edge_not_overwritten_by_depends_on(tmp_path):
+    """INHERITS edge must survive — resolve_cross_file_deps must not overwrite it with DEPENDS_ON."""
+    (tmp_path / "application_record.rb").write_text(
+        "class ApplicationRecord < ActiveRecord::Base\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course < ApplicationRecord\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    course_sym = "course.rb#class:Course"
+    app_rec_sym = "application_record.rb#class:ApplicationRecord"
+    adj = graph.to_adjacency_json()
+    edge = next(
+        (e for e in adj["edges"] if e["from"] == course_sym and e["to"] == app_rec_sym),
+        None,
+    )
+    assert edge is not None, "No edge from Course to ApplicationRecord found"
+    assert edge.get("rel") == "INHERITS", (
+        f"Expected rel=INHERITS but got rel={edge.get('rel')} — DEPENDS_ON overwrote INHERITS"
+    )
+
+
 def test_ruby_superclass_generates_depends_on(tmp_path):
     """class Course < ApplicationRecord must produce DEPENDS_ON course.rb → application_record.rb."""
     (tmp_path / "application_record.rb").write_text(

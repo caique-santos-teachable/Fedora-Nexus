@@ -132,12 +132,10 @@ class RubyIndexer:
                 superclass = attrs.get("superclass")
                 if superclass:
                     self._emit_dep(rel, superclass, sym_to_file, graph)
-                    # sym-to-sym: class → DEPENDS_ON → superclass
-                    # (INHERITS is also emitted by resolve_inheritance; DEPENDS_ON adds
-                    # generic traversal without needing to filter by rel type)
-                    target_sym = all_syms.get(superclass)
-                    if target_sym and target_sym.split("#")[0] != rel:
-                        graph.add_edge(sym_id, target_sym, rel="DEPENDS_ON")
+                    # Do NOT emit a sym-to-sym DEPENDS_ON here:
+                    # resolve_inheritance already emitted Class→Class INHERITS for this pair.
+                    # NetworkX DiGraph only supports one edge per (from, to) pair —
+                    # a DEPENDS_ON here would silently overwrite the INHERITS edge.
 
             # 2. Mixins: include / extend / prepend Mod
             elif kind == "mixin":
@@ -437,10 +435,10 @@ class RubyIndexer:
                 graph.add_edge(parent_id, sym_id, rel="CONTAINS")
                 if top_level is not None:
                     top_level[qualified_class_name] = sym_id
-                    # Register the short (last-segment) name so sym_to_file resolves
-                    # references to just the simple class name across files.
-                    if not scope_stack or "::".join(n for _, n in scope_stack) not in qualified_class_name[:-len(short_name)]:
-                        top_level[short_name] = sym_id
+                    # Always register the short (last-segment) name so that
+                    # resolve_inheritance can look up superclasses by simple name
+                    # even when the class is nested inside a module namespace.
+                    top_level[short_name] = sym_id
                 for child in node.children:
                     self._walk_symbols(
                         child, rel, graph, sym_id,

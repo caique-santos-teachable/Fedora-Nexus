@@ -45,6 +45,18 @@ _KIND_TO_TABLE = {
     "db_table": "Class", # SQL DDL tables (from structure.sql / schema files)
     "method": "Method",
     "class_method": "Method",  # Ruby class methods stored in Method table
+    # Rails DSL macros — stored in Method table with their kind preserved
+    "association": "Method",   # has_many, belongs_to, has_one, etc.
+    "hook": "Method",          # before_action, after_commit, around_save, etc.
+    "scope": "Method",         # scope :name, -> { ... }
+    "validation": "Method",    # validates :field, presence: true
+    "mixin": "Method",         # include Mod, extend Mod, prepend Mod
+    "attr": "Method",          # attr_accessor, attr_reader, attr_writer
+    "enum": "Method",          # enum status: [:draft, :published]
+    "delegate": "Method",      # delegate :foo, to: :target
+    "alias": "Method",         # alias_method :new_name, :old_name
+    "helper_method": "Method", # helper_method :current_user
+    "rescue_from": "Method",   # rescue_from SomeError, with: :handler
 }
 
 # Valid (from_table, to_table) pairs for CodeRelation
@@ -153,6 +165,18 @@ class KuzuGraphStore:
                     "Could not migrate Method table (scope_refs column): %s. "
                     "Run reset_db to get a clean schema.", migrate_exc
                 )
+        # Migration: add kind column to distinguish method/class_method/association/hook/etc.
+        try:
+            self._conn.execute("MATCH (m:Method) RETURN m.kind LIMIT 0")
+        except Exception:
+            try:
+                self._conn.execute("ALTER TABLE Method ADD kind STRING DEFAULT 'method'")
+                logger.info("Migrated Method table: added 'kind' column")
+            except Exception as migrate_exc:
+                logger.warning(
+                    "Could not migrate Method table (kind column): %s. "
+                    "Run reset_db to get a clean schema.", migrate_exc
+                )
         self._conn.execute(
             "CREATE REL TABLE IF NOT EXISTS CodeRelation("
             "FROM File TO File, FROM File TO Function, FROM File TO Class, FROM File TO Method, "
@@ -244,8 +268,28 @@ class KuzuGraphStore:
                     "is_exported": "true" if n.get("is_exported") else "false",
                     "owner_name": n.get("owner_name", ""),
                     "scope_refs": _json.dumps(n.get("scope_refs") or []),
+                    "kind": kind,
                 })
-            # other kinds (module, hook, …) — not stored in DB
+            elif kind in (
+                "association", "hook", "scope", "validation",
+                "mixin", "attr", "enum", "delegate", "alias",
+                "helper_method", "rescue_from",
+            ):
+                # Rails DSL macros — stored in Method table with their kind preserved.
+                # These are class-body declarations (not def blocks), so end_line,
+                # is_exported, owner_name, and scope_refs use safe defaults.
+                methods.append({
+                    "id": node_id, "root_path": root_path,
+                    "name": n.get("name", ""), "file_path": n.get("file_path", ""),
+                    "language": language,
+                    "start_line": int(n.get("start_line", 0)),
+                    "end_line": int(n.get("start_line", 0)),  # single-line declaration
+                    "content": str(n.get("content", "") or "")[:2000],
+                    "is_exported": "false",
+                    "owner_name": "",
+                    "scope_refs": "[]",
+                    "kind": kind,
+                })
 
         # ── Bulk node inserts via COPY FROM CSV ───────────────────────────────
         # Individual autocommit inserts are ~6ms/row on disk (WAL fsync per tx).
@@ -262,7 +306,7 @@ class KuzuGraphStore:
                  "start_line", "end_line", "content", "is_exported", "kind"])
             self._bulk_copy_nodes(tmp_dir, "Method", methods,
                 ["id", "root_path", "name", "file_path", "language",
-                 "start_line", "end_line", "content", "is_exported", "owner_name", "scope_refs"])
+                 "start_line", "end_line", "content", "is_exported", "owner_name", "scope_refs", "kind"])
         logger.info(
             "[SAVE] Node bulk insert: %d files + %d functions + %d classes + %d methods in %.2fs",
             len(files), len(functions), len(classes), len(methods),
@@ -557,6 +601,18 @@ class KuzuGraphStore:
         "method":      ("Method",   "method",   None),
         "class_method": ("Method",  "method",   None),  # Ruby class methods stored in Method table
         "file":        ("File",     "file",     None),
+        # Rails DSL macros — all stored in Method table, filterable by kind column
+        "association":   ("Method", "association",   "association"),
+        "hook":          ("Method", "hook",           "hook"),
+        "scope":         ("Method", "scope",          "scope"),
+        "validation":    ("Method", "validation",     "validation"),
+        "mixin":         ("Method", "mixin",          "mixin"),
+        "attr":          ("Method", "attr",           "attr"),
+        "enum":          ("Method", "enum",           "enum"),
+        "delegate":      ("Method", "delegate",       "delegate"),
+        "alias":         ("Method", "alias",          "alias"),
+        "helper_method": ("Method", "helper_method",  "helper_method"),
+        "rescue_from":   ("Method", "rescue_from",    "rescue_from"),
     }
 
     def search(self, root_path: str, query: str, limit: int = 20, kind: str | None = None) -> list[dict]:

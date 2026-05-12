@@ -609,3 +609,109 @@ def test_kind_column_migration_idempotent(tmp_path):
     store.init_schema()
     # Calling init_schema() again must not raise even though kind already exists
     store.init_schema()  # should be a no-op (IF NOT EXISTS + migration probe)
+
+
+def test_dsl_association_nodes_persisted_to_kuzu(tmp_path):
+    """has_many/belongs_to nodes (kind='association') must appear in the Method table after save_graph.
+
+    Regression: DSL nodes were silently dropped by save_graph because they had no
+    elif branch and fell through to the '# other kinds — not stored in DB' comment.
+    """
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    root = "/tmp/test_dsl_assoc"
+    g.add_node("app/models/course.rb", language="ruby", kind="file",
+               name="course.rb", content="")
+    g.add_node("app/models/course.rb#class:Course", language="ruby",
+               kind="class", name="Course", file_path="app/models/course.rb",
+               content="", start_line=1, end_line=20)
+    g.add_node("app/models/course.rb#association:has_many:lectures",
+               language="ruby", kind="association",
+               name="lectures", macro="has_many",
+               file_path="app/models/course.rb", start_line=3, content="has_many :lectures")
+    g.add_node("app/models/course.rb#association:belongs_to:school",
+               language="ruby", kind="association",
+               name="school", macro="belongs_to",
+               file_path="app/models/course.rb", start_line=4, content="belongs_to :school")
+    g.add_edge("app/models/course.rb", "app/models/course.rb#class:Course", rel="CONTAINS")
+    g.add_edge("app/models/course.rb#class:Course",
+               "app/models/course.rb#association:has_many:lectures", rel="CONTAINS")
+    g.add_edge("app/models/course.rb#class:Course",
+               "app/models/course.rb#association:belongs_to:school", rel="CONTAINS")
+    store.save_graph(root, g)
+
+    # Verify association nodes are in Kuzu Method table
+    res = store._conn.execute(
+        "MATCH (m:Method {root_path: $rp}) WHERE m.kind = 'association' RETURN m.name ORDER BY m.name",
+        {"rp": root},
+    )
+    names = []
+    while res.has_next():
+        names.append(res.get_next()[0])
+    assert "lectures" in names, f"Expected 'lectures' in Method table; got {names}"
+    assert "school" in names, f"Expected 'school' in Method table; got {names}"
+    store.delete_repo(root)
+
+
+def test_dsl_hook_nodes_persisted_to_kuzu(tmp_path):
+    """before_action nodes (kind='hook') must appear in the Method table after save_graph."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    root = "/tmp/test_dsl_hook"
+    g.add_node("app/controllers/courses_controller.rb", language="ruby", kind="file",
+               name="courses_controller.rb", content="")
+    g.add_node("app/controllers/courses_controller.rb#class:CoursesController",
+               language="ruby", kind="class", name="CoursesController",
+               file_path="app/controllers/courses_controller.rb",
+               content="", start_line=1, end_line=10)
+    g.add_node("app/controllers/courses_controller.rb#hook:before_action:authenticate_user!",
+               language="ruby", kind="hook",
+               name="before_action:authenticate_user!",
+               file_path="app/controllers/courses_controller.rb",
+               start_line=2, content="before_action :authenticate_user!")
+    g.add_edge("app/controllers/courses_controller.rb",
+               "app/controllers/courses_controller.rb#class:CoursesController", rel="CONTAINS")
+    g.add_edge("app/controllers/courses_controller.rb#class:CoursesController",
+               "app/controllers/courses_controller.rb#hook:before_action:authenticate_user!",
+               rel="CONTAINS")
+    store.save_graph(root, g)
+
+    res = store._conn.execute(
+        "MATCH (m:Method {root_path: $rp}) WHERE m.kind = 'hook' RETURN m.name",
+        {"rp": root},
+    )
+    names = []
+    while res.has_next():
+        names.append(res.get_next()[0])
+    assert any("before_action" in n for n in names), (
+        f"Expected hook method in Method table; got {names}"
+    )
+    store.delete_repo(root)
+
+
+def test_method_kind_column_preserved_for_regular_methods(tmp_path):
+    """Regular method nodes must have kind='method' in Kuzu after save_graph."""
+    store = KuzuGraphStore(db_path=str(tmp_path / "test.db"))
+    store.init_schema()
+    g = DependencyGraph()
+    root = "/tmp/test_method_kind"
+    g.add_node("app/models/course.rb", language="ruby", kind="file",
+               name="course.rb", content="")
+    g.add_node("app/models/course.rb#method:Course.publish", language="ruby",
+               kind="method", name="publish", file_path="app/models/course.rb",
+               content="def publish; end", start_line=5, end_line=7,
+               owner_name="Course", scope_refs=[])
+    g.add_edge("app/models/course.rb", "app/models/course.rb#method:Course.publish",
+               rel="CONTAINS")
+    store.save_graph(root, g)
+
+    res = store._conn.execute(
+        "MATCH (m:Method {root_path: $rp, name: 'publish'}) RETURN m.kind",
+        {"rp": root},
+    )
+    assert res.has_next()
+    assert res.get_next()[0] == "method"
+    store.delete_repo(root)
+
