@@ -94,6 +94,105 @@ class RubyIndexer:
             if parent_sym_id and parent_sym_id != sym_id:
                 graph.add_edge(sym_id, parent_sym_id, rel="INHERITS")
 
+    # ── Cross-file DEPENDS_ON post-pass ──────────────────────────────────────
+
+    def resolve_cross_file_deps(
+        self,
+        rel: str,
+        graph: DependencyGraph,
+        file_symbols: dict[str, dict[str, str]],
+        sym_to_file: dict[str, str],
+    ) -> None:
+        """Emit DEPENDS_ON edges from *rel* to files that define constants/modules
+        referenced in this file's symbols (superclass, mixins, associations, rescue_from,
+        delegate :to, struct/data_class, constant assignments).
+
+        Rails uses Zeitwerk autoloading — most cross-file references never appear
+        in require statements. This pass resolves them after all symbols are known.
+
+        sym_to_file: flat map {qualified_name -> file_rel} for every symbol in the repo.
+        """
+        for sym_id in list(graph.nodes()):
+            if not sym_id.startswith(rel + "#"):
+                continue
+            attrs = graph.node_attrs(sym_id)
+            kind = attrs.get("kind", "")
+
+            # 1. Superclass / class inheritance
+            if kind == "class":
+                superclass = attrs.get("superclass")
+                if superclass:
+                    self._emit_dep(rel, superclass, sym_to_file, graph)
+
+            # 2. Mixins: include / extend / prepend Mod
+            elif kind == "mixin":
+                mixin_name = attrs.get("name", "")
+                if mixin_name:
+                    self._emit_dep(rel, mixin_name, sym_to_file, graph)
+
+            # 3. Associations: belongs_to / has_many / etc → target model file
+            elif kind == "association":
+                assoc_name = attrs.get("name", "")
+                if assoc_name:
+                    # Rails convention: :school → School, :course_sections → CourseSection
+                    const = self._assoc_to_const(assoc_name)
+                    self._emit_dep(rel, const, sym_to_file, graph)
+
+            # 4. rescue_from ExceptionClass
+            elif kind == "rescue_from":
+                exc_name = attrs.get("name", "")
+                if exc_name and exc_name != "__unknown__":
+                    self._emit_dep(rel, exc_name, sym_to_file, graph)
+
+            # 5. delegate :method, to: :target — target is a symbol name, not a const,
+            #    but if it maps to an association we can resolve transitively.
+            # (Skipped — target is a method/attr name, not a constant; too ambiguous)
+
+            # 6. struct / data_class (Struct.new / Data.define) — self-contained, no dep
+
+            # 7. constant assignments that reference known constants on RHS
+            # (Would require deeper AST analysis — deferred)
+
+    @staticmethod
+    def _assoc_to_const(name: str) -> str:
+        """Convert a Rails association name to the expected model constant.
+
+        Examples:
+          school          → School
+          course_sections → CourseSection  (singularize last word + CamelCase)
+          school_id       → School
+        """
+        # Strip common suffixes
+        for suffix in ("_ids", "_id"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        # Naive singularize: strip trailing 's' (handles most Rails cases)
+        # and 'es' for words ending in 'es' (boxes → box, etc.)
+        parts = name.split("_")
+        last = parts[-1]
+        if last.endswith("ies"):
+            last = last[:-3] + "y"
+        elif last.endswith("ses") or last.endswith("xes") or last.endswith("zes"):
+            last = last[:-2]
+        elif last.endswith("s") and not last.endswith("ss"):
+            last = last[:-1]
+        parts[-1] = last
+        return "".join(p.capitalize() for p in parts)
+
+    @staticmethod
+    def _emit_dep(
+        rel: str,
+        const_name: str,
+        sym_to_file: dict[str, str],
+        graph: DependencyGraph,
+    ) -> None:
+        """Emit DEPENDS_ON from rel to the file that defines const_name (if known and different)."""
+        target_file = sym_to_file.get(const_name)
+        if target_file and target_file != rel:
+            _ensure_node(graph, target_file, "ruby")
+            graph.add_edge(rel, target_file)  # networkx DiGraph ignores duplicate edges
+
     # ── Imports ───────────────────────────────────────────────────────────────
 
     def extract_imports(

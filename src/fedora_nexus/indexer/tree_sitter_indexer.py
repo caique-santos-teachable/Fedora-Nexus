@@ -213,6 +213,22 @@ class TreeSitterIndexer(BaseIndexer):
             if lang == "ruby":
                 self._ruby.resolve_inheritance(rel, graph, file_symbols)
 
+        # ── Ruby cross-file DEPENDS_ON post-pass ─────────────────────────────────
+        # Rails uses Zeitwerk autoloading — most cross-file references (superclass,
+        # mixins, associations) never appear in require statements. Resolve them now
+        # that all file_symbols across the repo are known.
+        ruby_files = [rel for rel, (lang, *_) in parsed_trees.items() if lang == "ruby"]
+        if ruby_files:
+            # Build a flat {qualified_name -> file_rel} map for all Ruby symbols.
+            sym_to_file: dict[str, str] = {}
+            for file_rel, syms in file_symbols.items():
+                for name in syms:
+                    # Only register the first file that defines a given name (stable order).
+                    if name not in sym_to_file:
+                        sym_to_file[name] = file_rel
+            for rel in ruby_files:
+                self._ruby.resolve_cross_file_deps(rel, graph, file_symbols, sym_to_file)
+
         # ── CALLS pass ────────────────────────────────────────────────────────
         for rel, (lang, tree, _f, _source) in parsed_trees.items():
             imported_symbols = self._collect_imported_symbols(rel, graph, file_symbols, depth=2)

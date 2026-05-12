@@ -1262,3 +1262,88 @@ def test_ruby_instance_method_owner_name_is_fqcn(tmp_path):
         f"owner_name should be 'Transactions::Refund', got '{attrs['owner_name']}'"
     )
 
+
+# ── Ruby cross-file DEPENDS_ON post-pass ─────────────────────────────────────
+
+def test_ruby_superclass_generates_depends_on(tmp_path):
+    """class Course < ApplicationRecord must produce DEPENDS_ON course.rb → application_record.rb."""
+    (tmp_path / "application_record.rb").write_text(
+        "class ApplicationRecord < ActiveRecord::Base\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course < ApplicationRecord\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    deps = graph.get_dependencies("course.rb")
+    assert "application_record.rb" in deps, (
+        f"Expected DEPENDS_ON course.rb → application_record.rb; got deps={deps}"
+    )
+
+
+def test_ruby_mixin_include_generates_depends_on(tmp_path):
+    """include Publishable inside a class must produce DEPENDS_ON from its file to publishable.rb."""
+    (tmp_path / "publishable.rb").write_text(
+        "module Publishable\n  def publish; end\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course\n  include Publishable\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    deps = graph.get_dependencies("course.rb")
+    assert "publishable.rb" in deps, (
+        f"Expected DEPENDS_ON course.rb → publishable.rb via include; got deps={deps}"
+    )
+
+
+def test_ruby_belongs_to_generates_depends_on(tmp_path):
+    """belongs_to :school must produce DEPENDS_ON from the model file to school.rb."""
+    (tmp_path / "school.rb").write_text(
+        "class School < ApplicationRecord\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course < ApplicationRecord\n  belongs_to :school\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    deps = graph.get_dependencies("course.rb")
+    assert "school.rb" in deps, (
+        f"Expected DEPENDS_ON course.rb → school.rb via belongs_to; got deps={deps}"
+    )
+
+
+def test_ruby_has_many_plural_generates_depends_on(tmp_path):
+    """has_many :enrollments must produce DEPENDS_ON → enrollment.rb (singularized)."""
+    (tmp_path / "enrollment.rb").write_text(
+        "class Enrollment < ApplicationRecord\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course < ApplicationRecord\n  has_many :enrollments\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    deps = graph.get_dependencies("course.rb")
+    assert "enrollment.rb" in deps, (
+        f"Expected DEPENDS_ON course.rb → enrollment.rb via has_many; got deps={deps}"
+    )
+
+
+def test_ruby_cross_file_dep_not_emitted_when_target_unknown(tmp_path):
+    """If the superclass is not defined in any indexed file, no spurious edge is emitted."""
+    (tmp_path / "course.rb").write_text(
+        "class Course < ActiveRecord::Base\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    # No file defines ActiveRecord::Base — no DEPENDS_ON to another file should be added.
+    # Filter to file-to-file deps only (exclude CONTAINS edges to symbol nodes).
+    file_deps = [d for d in graph.get_dependencies("course.rb") if "#" not in d]
+    assert file_deps == [], f"Expected no file deps for unknown superclass; got deps={file_deps}"
+
+
+def test_ruby_assoc_to_const_singularization():
+    """_assoc_to_const must handle common Rails plural forms correctly."""
+    from fedora_nexus.indexer.languages.ruby import RubyIndexer as _RI
+    ri = _RI()
+    assert ri._assoc_to_const("schools") == "School"
+    assert ri._assoc_to_const("enrollments") == "Enrollment"
+    assert ri._assoc_to_const("course_sections") == "CourseSection"
+    assert ri._assoc_to_const("school_id") == "School"
+    assert ri._assoc_to_const("categories") == "Category"
+
