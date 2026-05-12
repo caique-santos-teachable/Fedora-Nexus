@@ -215,10 +215,19 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="query_graph",
             description=(
-                "Execute a Cypher-subset query against the dependency graph. "
-                "Supported clauses: MATCH, WHERE (CONTAINS / ENDS WITH / STARTS WITH / =), RETURN. "
-                "Supported relationship patterns: -[:DEPENDS_ON]->, <-[:DEPENDS_ON]-, -[:DEPENDS_ON*1..3]->. "
-                "Example: MATCH (f) WHERE f.path CONTAINS 'models' RETURN f"
+                "Execute a native Kuzu Cypher query against the dependency graph. "
+                "Full Kuzu Cypher is supported: MATCH, WHERE, RETURN, WITH, "
+                "OPTIONAL MATCH, UNION ALL, ORDER BY, LIMIT, SKIP, IN [...], "
+                "collect(), count(), and property predicates (CONTAINS, STARTS WITH, ENDS WITH, =). "
+                "Read-only: CREATE/DELETE/SET/MERGE/DROP/ALTER are blocked. "
+                "Node tables: File, Class (also stores modules, concerns, db_tables — filter with kind='db_table'), "
+                "Function, Method. "
+                "Relationship: CodeRelation with type DEPENDS_ON | CONTAINS | CALLS | INHERITS. "
+                "All node IDs are prefixed with root_path:: — use file_path or name for human-readable filters. "
+                "Examples: "
+                "MATCH (f:File)-[r:CodeRelation]->(c:Class) WHERE c.kind='db_table' AND f.root_path=$root RETURN c.name, c.content LIMIT 30 ; "
+                "MATCH (a:Class {name:'Course'})-[r:CodeRelation {type:'DEPENDS_ON'}]->(b:Class) RETURN b.name, b.kind ; "
+                "MATCH (t:Class {kind:'db_table'})-[r:CodeRelation {type:'DEPENDS_ON'}]->(m:Class {kind:'db_table'}) RETURN t.name AS from_table, m.name AS to_table"
             ),
             inputSchema={
                 "type": "object",
@@ -294,7 +303,7 @@ async def list_tools() -> list[Tool]:
                     "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
                     "kind": {
                         "type": "string",
-                        "enum": ["function", "class", "method", "class_method", "file"],
+                        "enum": ["function", "class", "method", "class_method", "file", "db_table"],
                         "description": "Optional: restrict results to this symbol type only.",
                     },
                 },

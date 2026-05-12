@@ -40,8 +40,9 @@ _KIND_TO_TABLE = {
     "file": "File",
     "function": "Function",
     "class": "Class",
-    "module": "Class",   # Ruby modules stored alongside classes in the Class table
+    "module": "Class",    # Ruby modules stored alongside classes in the Class table
     "concern": "Class",  # Rails concerns (module + ActiveSupport::Concern) same as module
+    "db_table": "Class", # SQL DDL tables (from structure.sql / schema files)
     "method": "Method",
     "class_method": "Method",  # Ruby class methods stored in Method table
 }
@@ -196,7 +197,7 @@ class KuzuGraphStore:
                     "content": str(n.get("content", "") or "")[:8000],
                     "is_exported": "true" if n.get("is_exported") else "false",
                 })
-            elif kind == "class":
+            elif kind in ("class", "module", "concern", "db_table"):
                 classes.append({
                     "id": node_id, "root_path": root_path,
                     "name": n.get("name", ""), "file_path": n.get("file_path", ""),
@@ -521,6 +522,9 @@ class KuzuGraphStore:
     _KIND_TO_FTS_TABLE: dict[str, tuple[str, str]] = {
         "function":    ("Function", "function"),
         "class":       ("Class",    "class"),
+        "module":      ("Class",    "class"),      # Ruby modules in Class table
+        "concern":     ("Class",    "class"),      # Rails concerns in Class table
+        "db_table":    ("Class",    "db_table"),   # SQL schema tables in Class table
         "method":      ("Method",   "method"),
         "class_method": ("Method",  "method"),  # Ruby class methods stored in Method table
         "file":        ("File",     "file"),

@@ -13,6 +13,7 @@ from fedora_nexus.graph.engine import DependencyGraph
 from fedora_nexus.indexer.base import BaseIndexer, detect_language
 from fedora_nexus.indexer.languages.python import PythonIndexer
 from fedora_nexus.indexer.languages.ruby import RubyIndexer
+from fedora_nexus.indexer.languages.sql import SqlIndexer
 from fedora_nexus.indexer.languages.typescript import TypeScriptIndexer
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ _EXT_TO_LANG = {
     ".js": "javascript",
     ".jsx": "javascript",
     ".rb": "ruby",
+    ".sql": "sql",
 }
 
 
@@ -91,6 +93,7 @@ class TreeSitterIndexer(BaseIndexer):
         self._python = PythonIndexer()
         self._typescript = TypeScriptIndexer()
         self._ruby = RubyIndexer()
+        self._sql = SqlIndexer()
 
     def index(self, root: str, *, symbol_mode: bool = False) -> DependencyGraph:
         root_path = Path(root).resolve()
@@ -139,6 +142,9 @@ class TreeSitterIndexer(BaseIndexer):
                 source = f.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 return None
+            if lang == "sql":
+                # SQL has no tree-sitter parser; body is processed directly in symbol pass.
+                return rel, lang, f, source, None
             p = _parsers()
             if lang == "typescript" and f.suffix == ".tsx":
                 parser = p.get("typescript_tsx", p["typescript"])
@@ -171,6 +177,7 @@ class TreeSitterIndexer(BaseIndexer):
                     self._typescript.extract_imports(rel, tree, root_path, f, graph)
                 elif lang == "ruby":
                     self._ruby.extract_imports(rel, tree, f, root_path, graph)
+                # SQL: no import extraction needed
 
         parsed_count = len(parsed_trees)
         logger.info(
@@ -198,6 +205,8 @@ class TreeSitterIndexer(BaseIndexer):
                 file_symbols[rel] = self._typescript.extract_symbols(rel, tree, graph, source=source)
             elif lang == "ruby":
                 file_symbols[rel] = self._ruby.extract_symbols(rel, tree, graph, source=source)
+            elif lang == "sql":
+                file_symbols[rel] = self._sql.extract_symbols(rel, source, graph)
 
         sym_data = graph.to_adjacency_json()
         logger.info(

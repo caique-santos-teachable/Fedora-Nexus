@@ -13,6 +13,7 @@ _EXT_MAP: dict[str, str] = {
     ".js": "javascript",
     ".jsx": "javascript",
     ".rb": "ruby",
+    ".sql": "sql",
 }
 
 

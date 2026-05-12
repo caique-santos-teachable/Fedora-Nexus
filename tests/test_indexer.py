@@ -9,6 +9,7 @@ from fedora_nexus.indexer.base import detect_language
 PythonIndexer = lambda: TreeSitterIndexer(languages=["python"])
 TypeScriptIndexer = lambda: TreeSitterIndexer(languages=["typescript", "javascript"])
 RubyIndexer = lambda: TreeSitterIndexer(languages=["ruby"])
+SqlIndexer = lambda: TreeSitterIndexer(languages=["sql"])
 
 
 # ── detect_language ──────────────────────────────────────────────────────────
@@ -1412,4 +1413,138 @@ def test_ruby_module_node_present_in_graph(tmp_path):
     attrs = graph.node_attrs(sym_id)
     assert attrs["kind"] == "module"
     assert attrs["name"] == "Publishable"
+
+
+# ── SqlIndexer ────────────────────────────────────────────────────────────────
+
+_PG_STRUCTURE = """\
+CREATE TABLE "public"."courses" (
+    "id" bigint NOT NULL,
+    "name" character varying,
+    "school_id" bigint NOT NULL
+);
+
+CREATE TABLE "public"."schools" (
+    "id" bigint NOT NULL,
+    "name" character varying
+);
+
+CREATE TABLE "public"."enrollments" (
+    "id" bigint NOT NULL,
+    "course_id" bigint NOT NULL,
+    "user_id" bigint NOT NULL
+);
+
+ALTER TABLE ONLY "public"."courses"
+    ADD CONSTRAINT "fk_rails_1" FOREIGN KEY ("school_id") REFERENCES "public"."schools"("id");
+
+ALTER TABLE ONLY "public"."enrollments"
+    ADD CONSTRAINT "fk_rails_2" FOREIGN KEY ("course_id") REFERENCES "public"."courses"("id");
+"""
+
+_MYSQL_STRUCTURE = """\
+CREATE TABLE `courses` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `name` varchar(255),
+  `school_id` bigint NOT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `fk_school` FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`)
+) ENGINE=InnoDB;
+
+CREATE TABLE `schools` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `name` varchar(255),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB;
+"""
+
+
+def test_sql_indexer_creates_db_table_nodes(tmp_path):
+    """CREATE TABLE statements must produce db_table nodes in the graph."""
+    (tmp_path / "structure.sql").write_text(_PG_STRUCTURE)
+    graph = SqlIndexer().index(str(tmp_path), symbol_mode=True)
+    assert graph.has_node("structure.sql#db_table:courses")
+    assert graph.has_node("structure.sql#db_table:schools")
+    assert graph.has_node("structure.sql#db_table:enrollments")
+
+
+def test_sql_indexer_db_table_node_attributes(tmp_path):
+    """db_table nodes must have kind, name, language, and content with column info."""
+    (tmp_path / "structure.sql").write_text(_PG_STRUCTURE)
+    graph = SqlIndexer().index(str(tmp_path), symbol_mode=True)
+    attrs = graph.node_attrs("structure.sql#db_table:courses")
+    assert attrs["kind"] == "db_table"
+    assert attrs["name"] == "courses"
+    assert attrs["language"] == "sql"
+    # content should contain column info
+    assert "id" in attrs["content"]
+    assert "school_id" in attrs["content"]
+
+
+def test_sql_indexer_alter_table_fk_generates_depends_on(tmp_path):
+    """ALTER TABLE FOREIGN KEY must produce DEPENDS_ON edges between table nodes."""
+    (tmp_path / "structure.sql").write_text(_PG_STRUCTURE)
+    graph = SqlIndexer().index(str(tmp_path), symbol_mode=True)
+    courses_sym = "structure.sql#db_table:courses"
+    schools_sym = "structure.sql#db_table:schools"
+    enrollments_sym = "structure.sql#db_table:enrollments"
+
+    deps_courses = graph.get_dependencies(courses_sym)
+    assert schools_sym in deps_courses, (
+        f"Expected courses → DEPENDS_ON → schools via FK; got {deps_courses}"
+    )
+    deps_enrollments = graph.get_dependencies(enrollments_sym)
+    assert courses_sym in deps_enrollments, (
+        f"Expected enrollments → DEPENDS_ON → courses via FK; got {deps_enrollments}"
+    )
+
+
+def test_sql_indexer_inline_fk_generates_depends_on(tmp_path):
+    """Inline FOREIGN KEY inside CREATE TABLE body must produce DEPENDS_ON edges."""
+    (tmp_path / "schema.sql").write_text(_MYSQL_STRUCTURE)
+    graph = SqlIndexer().index(str(tmp_path), symbol_mode=True)
+    courses_sym = "schema.sql#db_table:courses"
+    schools_sym = "schema.sql#db_table:schools"
+    deps = graph.get_dependencies(courses_sym)
+    assert schools_sym in deps, (
+        f"Expected courses → DEPENDS_ON → schools via inline FK; got {deps}"
+    )
+
+
+def test_sql_indexer_file_contains_table(tmp_path):
+    """SQL file must have CONTAINS edges to all table nodes."""
+    (tmp_path / "structure.sql").write_text(_PG_STRUCTURE)
+    graph = SqlIndexer().index(str(tmp_path), symbol_mode=True)
+    deps = graph.get_dependencies("structure.sql")
+    table_syms = [d for d in deps if "#db_table:" in d]
+    assert len(table_syms) == 3, f"Expected 3 CONTAINS edges; got {table_syms}"
+
+
+def test_sql_indexer_no_self_loop_on_fk(tmp_path):
+    """FK pointing to the same table must not produce a self-loop edge."""
+    (tmp_path / "tree.sql").write_text(
+        'CREATE TABLE "nodes" ("id" bigint, "parent_id" bigint);\n'
+        'ALTER TABLE ONLY "nodes"\n'
+        '    ADD CONSTRAINT "fk_parent" FOREIGN KEY ("parent_id") REFERENCES "nodes"("id");\n'
+    )
+    graph = SqlIndexer().index(str(tmp_path), symbol_mode=True)
+    nodes_sym = "tree.sql#db_table:nodes"
+    deps = [d for d in graph.get_dependencies(nodes_sym) if "#db_table:" in d]
+    assert nodes_sym not in deps, "Self-referencing FK must not create a self-loop"
+
+
+def test_sql_indexer_symbol_mode_false_no_tables(tmp_path):
+    """Without symbol_mode, SQL files are indexed as file nodes only (no table nodes)."""
+    (tmp_path / "structure.sql").write_text(_PG_STRUCTURE)
+    graph = SqlIndexer().index(str(tmp_path), symbol_mode=False)
+    assert graph.has_node("structure.sql")
+    table_nodes = [n for n in graph.nodes() if "#db_table:" in n]
+    assert table_nodes == [], f"symbol_mode=False must not extract tables; got {table_nodes}"
+
+
+def test_sql_indexer_detect_language():
+    """detect_language must return 'sql' for .sql files."""
+    from fedora_nexus.indexer.base import detect_language
+    assert detect_language("db/structure.sql") == "sql"
+    assert detect_language("schema.sql") == "sql"
 
