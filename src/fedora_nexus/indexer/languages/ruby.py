@@ -103,15 +103,24 @@ class RubyIndexer:
         file_symbols: dict[str, dict[str, str]],
         sym_to_file: dict[str, str],
     ) -> None:
-        """Emit DEPENDS_ON edges from *rel* to files that define constants/modules
-        referenced in this file's symbols (superclass, mixins, associations, rescue_from,
-        delegate :to, struct/data_class, constant assignments).
+        """Emit DEPENDS_ON edges at two levels of precision:
+
+        1. File → File  (course.rb → publishable.rb)
+        2. Class/Module → Class/Module  (course.rb#class:Course → publishable.rb#module:Publishable)
+
+        Sources: superclass, mixins (include/extend/prepend), associations
+        (belongs_to/has_many/…), and rescue_from exception classes.
 
         Rails uses Zeitwerk autoloading — most cross-file references never appear
         in require statements. This pass resolves them after all symbols are known.
 
         sym_to_file: flat map {qualified_name -> file_rel} for every symbol in the repo.
         """
+        # Flat {name -> sym_id} for cross-file symbol-level edge resolution.
+        all_syms: dict[str, str] = {}
+        for syms in file_symbols.values():
+            all_syms.update(syms)
+
         for sym_id in list(graph.nodes()):
             if not sym_id.startswith(rel + "#"):
                 continue
@@ -123,12 +132,24 @@ class RubyIndexer:
                 superclass = attrs.get("superclass")
                 if superclass:
                     self._emit_dep(rel, superclass, sym_to_file, graph)
+                    # sym-to-sym: class → DEPENDS_ON → superclass
+                    # (INHERITS is also emitted by resolve_inheritance; DEPENDS_ON adds
+                    # generic traversal without needing to filter by rel type)
+                    target_sym = all_syms.get(superclass)
+                    if target_sym and target_sym.split("#")[0] != rel:
+                        graph.add_edge(sym_id, target_sym, rel="DEPENDS_ON")
 
             # 2. Mixins: include / extend / prepend Mod
             elif kind == "mixin":
                 mixin_name = attrs.get("name", "")
                 if mixin_name:
                     self._emit_dep(rel, mixin_name, sym_to_file, graph)
+                    # enclosing class/module → DEPENDS_ON → target module/class
+                    target_sym = all_syms.get(mixin_name)
+                    if target_sym and target_sym.split("#")[0] != rel:
+                        enclosing = self._enclosing_class(sym_id, graph)
+                        if enclosing:
+                            graph.add_edge(enclosing, target_sym, rel="DEPENDS_ON")
 
             # 3. Associations: belongs_to / has_many / etc → target model file
             elif kind == "association":
@@ -137,12 +158,24 @@ class RubyIndexer:
                     # Rails convention: :school → School, :course_sections → CourseSection
                     const = self._assoc_to_const(assoc_name)
                     self._emit_dep(rel, const, sym_to_file, graph)
+                    # enclosing class → DEPENDS_ON → model class
+                    target_sym = all_syms.get(const)
+                    if target_sym and target_sym.split("#")[0] != rel:
+                        enclosing = self._enclosing_class(sym_id, graph)
+                        if enclosing:
+                            graph.add_edge(enclosing, target_sym, rel="DEPENDS_ON")
 
             # 4. rescue_from ExceptionClass
             elif kind == "rescue_from":
                 exc_name = attrs.get("name", "")
                 if exc_name and exc_name != "__unknown__":
                     self._emit_dep(rel, exc_name, sym_to_file, graph)
+                    # enclosing class → DEPENDS_ON → exception class
+                    target_sym = all_syms.get(exc_name)
+                    if target_sym and target_sym.split("#")[0] != rel:
+                        enclosing = self._enclosing_class(sym_id, graph)
+                        if enclosing:
+                            graph.add_edge(enclosing, target_sym, rel="DEPENDS_ON")
 
             # 5. delegate :method, to: :target — target is a symbol name, not a const,
             #    but if it maps to an association we can resolve transitively.
@@ -152,6 +185,18 @@ class RubyIndexer:
 
             # 7. constant assignments that reference known constants on RHS
             # (Would require deeper AST analysis — deferred)
+
+    @staticmethod
+    def _enclosing_class(sym_id: str, graph: DependencyGraph) -> str | None:
+        """Return the class or module sym_id that CONTAINS this symbol, if any.
+
+        Traverses the CONTAINS edge backwards (predecessors) to find the enclosing
+        class or module node. Returns None if the symbol is file-level.
+        """
+        for parent in graph.get_dependents(sym_id):
+            if "#class:" in parent or "#module:" in parent:
+                return parent
+        return None
 
     @staticmethod
     def _assoc_to_const(name: str) -> str:

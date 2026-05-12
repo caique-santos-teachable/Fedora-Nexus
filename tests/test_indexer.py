@@ -1347,3 +1347,69 @@ def test_ruby_assoc_to_const_singularization():
     assert ri._assoc_to_const("school_id") == "School"
     assert ri._assoc_to_const("categories") == "Category"
 
+
+# ── Ruby sym-to-sym DEPENDS_ON (class/module level) ──────────────────────────
+
+def test_ruby_superclass_sym_to_sym_depends_on(tmp_path):
+    """class Course < ApplicationRecord must produce class:Course → DEPENDS_ON → class:ApplicationRecord."""
+    (tmp_path / "application_record.rb").write_text(
+        "class ApplicationRecord < ActiveRecord::Base\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course < ApplicationRecord\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    class_sym = "course.rb#class:Course"
+    target_sym = "application_record.rb#class:ApplicationRecord"
+    deps = graph.get_dependencies(class_sym)
+    assert target_sym in deps, (
+        f"Expected DEPENDS_ON {class_sym} → {target_sym}; got deps={deps}"
+    )
+
+
+def test_ruby_mixin_sym_to_sym_depends_on(tmp_path):
+    """include Publishable must produce class:Course → DEPENDS_ON → module:Publishable."""
+    (tmp_path / "publishable.rb").write_text(
+        "module Publishable\n  def publish; end\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course\n  include Publishable\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    class_sym = "course.rb#class:Course"
+    target_sym = "publishable.rb#module:Publishable"
+    deps = graph.get_dependencies(class_sym)
+    assert target_sym in deps, (
+        f"Expected DEPENDS_ON {class_sym} → {target_sym} via include; got deps={deps}"
+    )
+
+
+def test_ruby_association_sym_to_sym_depends_on(tmp_path):
+    """belongs_to :school must produce class:Course → DEPENDS_ON → class:School."""
+    (tmp_path / "school.rb").write_text(
+        "class School < ApplicationRecord\nend\n"
+    )
+    (tmp_path / "course.rb").write_text(
+        "class Course < ApplicationRecord\n  belongs_to :school\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    class_sym = "course.rb#class:Course"
+    target_sym = "school.rb#class:School"
+    deps = graph.get_dependencies(class_sym)
+    assert target_sym in deps, (
+        f"Expected DEPENDS_ON {class_sym} → {target_sym} via belongs_to; got deps={deps}"
+    )
+
+
+def test_ruby_module_node_present_in_graph(tmp_path):
+    """module Publishable must produce a module node in the graph (persisted to Kuzu via Class table)."""
+    (tmp_path / "publishable.rb").write_text(
+        "module Publishable\n  def publish; end\nend\n"
+    )
+    graph = RubyIndexer().index(str(tmp_path), symbol_mode=True)
+    sym_id = "publishable.rb#module:Publishable"
+    assert graph.has_node(sym_id), "module node must be indexed"
+    attrs = graph.node_attrs(sym_id)
+    assert attrs["kind"] == "module"
+    assert attrs["name"] == "Publishable"
+

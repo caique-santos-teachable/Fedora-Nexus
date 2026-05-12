@@ -40,6 +40,8 @@ _KIND_TO_TABLE = {
     "file": "File",
     "function": "Function",
     "class": "Class",
+    "module": "Class",   # Ruby modules stored alongside classes in the Class table
+    "concern": "Class",  # Rails concerns (module + ActiveSupport::Concern) same as module
     "method": "Method",
     "class_method": "Method",  # Ruby class methods stored in Method table
 }
